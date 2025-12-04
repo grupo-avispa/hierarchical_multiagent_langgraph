@@ -1,5 +1,6 @@
 
 
+import asyncio
 import time
 
 from hierarchical_multiagent_langgraph.supervisor import SupervisorManager
@@ -55,12 +56,40 @@ class HierarchicalMultiagent(LangGraphRosBase):
 
         self.get_logger().info('SupervisorManager graph created successfully...')
 
+    def _process_graph(self, initial_state: Messages) -> dict:
+        """
+        Process the agent graph with the given initial state.
+
+        Parameters:
+            initial_state: The initial conversation state.
+
+        Returns:
+            dict: The result from the graph invocation.
+        """
+        return self.loop.run_until_complete(
+            self.supervisor_manager.graph.ainvoke(initial_state)
+        )
+
+    def _process_graph_async(self, initial_state: Messages) -> None:
+        """
+        Process the agent graph asynchronously without blocking.
+
+        Parameters:
+            initial_state: The initial conversation state.
+
+        Returns:
+            None
+        """
+        asyncio.create_task(self.supervisor_manager.graph.ainvoke(initial_state))
+
     def agent_callback(self, request, response):
         """
         Handle incoming service requests.
 
         Receives a user request, processes it using the agent graph,
-        and returns the generated response.
+        and returns the generated response. The processing behavior depends
+        on the response_needed flag: if True, blocks until completion and
+        returns the response; if False, processes asynchronously.
 
         Parameters:
             request: The CallAgent request containing query details.
@@ -76,7 +105,7 @@ class HierarchicalMultiagent(LangGraphRosBase):
         init_time = time.time()
 
         # Prepare the initial conversation state with system prompt and user query
-        initial_state: Messages = {
+        initial_state: Messages = {  # type: ignore[annotation-unchecked]
             'messages': [
                 self.ollama_agent.create_message(
                     role='system',
@@ -90,17 +119,28 @@ class HierarchicalMultiagent(LangGraphRosBase):
                 content=user_query
             )
         )
-        # Run the agent graph asynchronously
-        result = self.loop.run_until_complete(
-            self.graph_manager.graph.ainvoke(initial_state)
-        )
 
-        # Log processing time and generated response
-        self.get_logger().info(f'Agent processing time: {time.time() - init_time:.3f} seconds')
-        self.get_logger().info(f'Generated response: {result["messages"][-1].get("content", "")}')
+        # Process graph based on response_needed flag
+        if response_needed:
+            # Blocking behavior: wait for the result and return it
+            result = self._process_graph(initial_state)
 
-        # Return the response to the user request
-        response.response_text = result['messages'][-1].get('content', '')
+            # Log processing time and generated response
+            self.get_logger().info(
+                f'Agent processing time: {time.time() - init_time:.3f} seconds'
+            )
+            self.get_logger().info(
+                f'Generated response: {result["messages"][-1].get("content", "")}'
+            )
+
+            # Return the response to the user request
+            response.agent_response = result['messages'][-1].get('content', '')
+        else:
+            # Non-blocking behavior: schedule asynchronously
+            self.get_logger().info('Processing query asynchronously (response not needed)')
+            self._process_graph_async(initial_state)
+            response.agent_response = 'Query submitted for processing'
+
         return response
 
 
