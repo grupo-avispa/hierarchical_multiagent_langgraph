@@ -14,7 +14,6 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 
 
 class HierarchicalMultiagent(LangGraphRosBase):
-
     def __init__(self):
         """Initialize the LangGraph ROS node."""
         # Call the base class initializer
@@ -104,20 +103,9 @@ class HierarchicalMultiagent(LangGraphRosBase):
 
         init_time = time.time()
 
-        # Prepare the initial conversation state with system prompt and user query
-        initial_state: Messages = {  # type: ignore[annotation-unchecked]
-            'messages': [
-                self.ollama_agent.create_message(
-                    role='system',
-                    content=self.system_prompt
-                )
-            ]
-        }
-        initial_state['messages'].append(
-            self.ollama_agent.create_message(
-                role='user',
-                content=user_query
-            )
+        # Set initial state with system prompt and user query
+        initial_state = self.supervisor_manager.set_initial_state(
+            self.system_prompt, user_query
         )
 
         # Process graph based on response_needed flag
