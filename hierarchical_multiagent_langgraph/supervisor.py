@@ -191,7 +191,8 @@ class SupervisorManager(LangGraphBase):
         Set initial messages from stored prompts and return the initial conversation state.
 
         This node processes the input state and creates the initial context state
-        with system and user prompts as the first messages.
+        with system and user prompts as the first messages. The system prompt is
+        rendered with Jinja2 using the initial empty agent context and user query.
 
         Parameters:
             state: The input state containing optional user prompt.
@@ -199,12 +200,22 @@ class SupervisorManager(LangGraphBase):
         Returns:
             ContextState: The initialized conversation state with system and user messages.
         """
-        # Create initial context state
+        # Extract user query from input state
+        user_query = state.get('user_prompt', '')
+
+        # Render the system prompt with initial context (empty agents list)
+        template = Template(self.system_prompt)
+        rendered_system_prompt = template.render(
+            agents_context=[],
+            user_query=user_query
+        )
+
+        # Create initial context state with rendered system prompt
         context_state: ContextState = {
             'messages': [
                 self.ollama_agent.create_message(
                     role='system',
-                    content=self.system_prompt
+                    content=rendered_system_prompt
                 )
             ],
             'agents': {},
@@ -212,11 +223,11 @@ class SupervisorManager(LangGraphBase):
         }
 
         # Add user message if user prompt is set
-        if state.get('user_prompt'):
+        if user_query:
             context_state['messages'].append(
                 self.ollama_agent.create_message(
                     role='user',
-                    content=state['user_prompt']
+                    content=user_query
                 )
             )
 
@@ -228,10 +239,8 @@ class SupervisorManager(LangGraphBase):
         Analyze the incoming task and invoke the LLM to make supervisor decisions.
 
         This node:
-        1. Obtains context about current active agents.
-        2. Retrieves the system message from the initial messages.
-        3. Renders the system prompt with current agent context.
-        4. Calls the LLM with the updated messages.
+        1. Re-renders the system prompt if agents context has changed.
+        2. Calls the LLM with the current messages.
 
         Parameters:
             state: The current context state.
@@ -241,45 +250,50 @@ class SupervisorManager(LangGraphBase):
         """
         self._log('Analyzing task and processing supervisor decision...')
 
-        # Build context about current agents
-        agents_list = []
+        # Re-render system prompt only if there are active agents (context changed)
         if state['agents']:
-            for agent_id, agent_info in state['agents'].items():
-                agents_list.append({
+            # Build context about current agents
+            agents_list = [
+                {
                     'id': agent_id,
                     'query': agent_info['query'],
                     'status': agent_info['status']
-                })
+                }
+                for agent_id, agent_info in state['agents'].items()
+            ]
 
-        # Find and extract the system message (first message with role='system')
-        system_message_content = None
-        for msg in state['messages']:
-            if msg.get('role') == 'system':
-                system_message_content = msg.get('content')
-                break
+            # Extract user query from the last user message
+            user_query = ''
+            for msg in reversed(state['messages']):
+                if msg.get('role') == 'user':
+                    user_query = msg.get('content', '')
+                    break
 
-        # Render the system prompt with agent context using Jinja2
-        template = Template(system_message_content or '')
-        rendered_system_prompt = template.render(agents=agents_list)
+            # Re-render the system prompt with updated agent context
+            template = Template(self.system_prompt)
+            rendered_system_prompt = template.render(
+                agents_context=agents_list,
+                user_query=user_query
+            )
 
-        # Update the system message with the rendered content
-        updated_messages = []
-        system_message_updated = False
-        for msg in state['messages']:
-            if msg.get('role') == 'system' and not system_message_updated:
-                updated_messages.append(
-                    self.ollama_agent.create_message(
-                        role='system',
-                        content=rendered_system_prompt
+            # Update the system message with the rendered content
+            updated_messages = []
+            system_message_updated = False
+            for msg in state['messages']:
+                if msg.get('role') == 'system' and not system_message_updated:
+                    updated_messages.append(
+                        self.ollama_agent.create_message(
+                            role='system',
+                            content=rendered_system_prompt
+                        )
                     )
-                )
-                system_message_updated = True
-            else:
-                updated_messages.append(msg)
+                    system_message_updated = True
+                else:
+                    updated_messages.append(msg)
 
-        state['messages'] = updated_messages
+            state['messages'] = updated_messages
 
-        # Invoke Ollama with the updated messages
+        # Invoke Ollama with the current messages
         try:
             messages_state: Messages = {'messages': state['messages']}
             result = await self.ollama_agent.invoke(state=messages_state)
