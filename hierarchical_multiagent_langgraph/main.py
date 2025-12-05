@@ -3,7 +3,7 @@
 import asyncio
 import time
 
-from hierarchical_multiagent_langgraph.supervisor import SupervisorManager, ContextState
+from hierarchical_multiagent_langgraph.supervisor import InputState, SupervisorManager
 from langgraph_base_ros.langgraph_ros_base import LangGraphRosBase
 from llm_interactions_msgs.srv import CallAgent
 
@@ -13,6 +13,7 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 
 
 class HierarchicalMultiagent(LangGraphRosBase):
+
     def __init__(self):
         """Initialize the LangGraph ROS node."""
         # Call the base class initializer
@@ -20,6 +21,7 @@ class HierarchicalMultiagent(LangGraphRosBase):
 
         # Initialize the Supervisor Manager
         self.supervisor_manager = SupervisorManager(
+            system_prompt=self.system_prompt,
             logger=self.get_logger(),
             ollama_agent=self.ollama_agent,
             max_steps=self.max_steps)
@@ -54,31 +56,37 @@ class HierarchicalMultiagent(LangGraphRosBase):
 
         self.get_logger().info('SupervisorManager graph created successfully...')
 
-    def _process_graph(self, initial_state: ContextState) -> dict:
+    def _process_graph(self, input_state: InputState, thread_id: str) -> dict:
         """
-        Process the agent graph with the given initial state.
+        Process the agent graph with the given input state.
 
         Parameters:
-            initial_state: The initial conversation state.
+            input_state: The input state containing user prompt.
+            thread_id: The thread ID for checkpoint persistence.
 
         Returns:
             dict: The result from the graph invocation.
         """
+        config = {'configurable': {'thread_id': thread_id}}
         return self.loop.run_until_complete(
-            self.supervisor_manager.graph.ainvoke(initial_state)
+            self.supervisor_manager.graph.ainvoke(input_state, config=config)
         )
 
-    def _process_graph_async(self, initial_state: ContextState) -> None:
+    def _process_graph_async(self, input_state: InputState, thread_id: str) -> None:
         """
         Process the agent graph asynchronously without blocking.
 
         Parameters:
-            initial_state: The initial conversation state.
+            input_state: The input state containing user prompt.
+            thread_id: The thread ID for checkpoint persistence.
 
         Returns:
             None
         """
-        asyncio.create_task(self.supervisor_manager.graph.ainvoke(initial_state))
+        config = {'configurable': {'thread_id': thread_id}}
+        asyncio.create_task(
+            self.supervisor_manager.graph.ainvoke(input_state, config=config)
+        )
 
     def agent_callback(self, request, response):
         """
@@ -100,17 +108,18 @@ class HierarchicalMultiagent(LangGraphRosBase):
 
         self.get_logger().debug(f'Received user query:\n{user_query}')
 
+        # Use a fixed thread ID for supervisor to maintain context
+        thread_id = 'supervisor'
+
         init_time = time.time()
 
-        # Set initial state with system prompt and user query
-        initial_state = self.supervisor_manager.set_initial_state(
-            self.system_prompt, user_query
-        )
+        # Create input state with user prompt
+        input_state: InputState = {'user_prompt': user_query}
 
         # Process graph based on response_needed flag
         if response_needed:
             # Blocking behavior: wait for the result and return it
-            result = self._process_graph(initial_state)
+            result = self._process_graph(input_state, thread_id)
 
             # Log processing time and generated response
             self.get_logger().info(
@@ -125,7 +134,7 @@ class HierarchicalMultiagent(LangGraphRosBase):
         else:
             # Non-blocking behavior: schedule asynchronously
             self.get_logger().info('Processing query asynchronously (response not needed)')
-            self._process_graph_async(initial_state)
+            self._process_graph_async(input_state, thread_id)
             response.agent_response = 'Query submitted for processing'
 
         return response

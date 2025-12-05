@@ -1,0 +1,13 @@
+{{ agents_context }}
+
+Analyze the user's request and decide:
+1. If there's an agent already working on a similar task,
+   check if it should continue or be cancelled.
+2. If no agent is handling this task, decide if a new agent
+   should be created.
+3. If the task doesn't require agent management, skip.
+
+Use the appropriate tool:
+- create_agent(query="task description") to create a new agent
+- delete_agent(agent_id=X) to cancel an existing agent
+- skip_agent() if no agent action is needed

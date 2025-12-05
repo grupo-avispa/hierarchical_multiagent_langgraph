@@ -1,11 +1,25 @@
-
 import asyncio
+from typing import TypedDict
+
+from jinja2 import Template
 from hierarchical_multiagent_langgraph.agent import SinglePurposeAgent, AgentStatus
 from langchain_core.tools import tool
+from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph_base_ros.langgraph_base import LangGraphBase
 from langgraph_base_ros.ollama_utils import Messages, Ollama
 from langsmith import traceable
+
+
+class InputState(TypedDict):
+    """
+    Represents the input state for the supervisor manager.
+
+    Attributes:
+        user_prompt: The user prompt for the conversation.
+    """
+
+    user_prompt: str
 
 
 class ContextState(Messages):
@@ -28,6 +42,7 @@ class SupervisorManager(LangGraphBase):
 
     def __init__(
         self,
+        system_prompt: str,
         logger=None,
         ollama_agent: Ollama | None = None,
         max_steps: int = 5
@@ -38,7 +53,10 @@ class SupervisorManager(LangGraphBase):
         Creates the LLM instance with default configuration.
 
         Parameters:
+            system_prompt: The system prompt for the supervisor.
             logger: Optional ROS2 logger to use for logging (default: None).
+            ollama_agent: Optional Ollama agent instance (default: None).
+            max_steps: Maximum number of steps for the graph execution (default: 5).
 
         Returns:
             None
@@ -50,43 +68,10 @@ class SupervisorManager(LangGraphBase):
         if self.ollama_agent is None:
             raise ValueError('Ollama agent instance must be provided to LangGraphManager.')
         self.ollama_agent: Ollama = self.ollama_agent
-        self.initial_state: ContextState = {
-            'messages': [],
-            'agents': {},
-            'next_agent_id': 1
-        }
         # Dictionary to store active agent instances
         self.active_agents: dict[int, SinglePurposeAgent] = {}
-
-    def set_initial_state(self, system_prompt: str, user_query: str = '') -> ContextState:
-        """
-        Set and return the initial conversation state with a system prompt and optional user query.
-
-        Parameters:
-            system_prompt: The system prompt to initialize the conversation.
-            user_query: The user query to append to the initial state (optional).
-
-        Returns:
-            ContextState: The initialized conversation state.
-        """
-        self.initial_state = {
-            'messages': [
-                self.ollama_agent.create_message(
-                    role='system',
-                    content=system_prompt
-                )
-            ],
-            'agents': {},
-            'next_agent_id': 1
-        }
-        if user_query:
-            self.initial_state['messages'].append(
-                self.ollama_agent.create_message(
-                    role='user',
-                    content=user_query
-                )
-            )
-        return self.initial_state
+        # Store prompt
+        self.system_prompt: str = system_prompt
 
     @tool(
         'create_agent',
@@ -201,77 +186,101 @@ class SupervisorManager(LangGraphBase):
             agent.set_status(AgentStatus.FAILURE)
 
     @traceable
+    async def set_initial_messages(self, state: InputState) -> ContextState:
+        """
+        Set initial messages from stored prompts and return the initial conversation state.
+
+        This node processes the input state and creates the initial context state
+        with system and user prompts as the first messages.
+
+        Parameters:
+            state: The input state containing optional user prompt.
+
+        Returns:
+            ContextState: The initialized conversation state with system and user messages.
+        """
+        # Create initial context state
+        context_state: ContextState = {
+            'messages': [
+                self.ollama_agent.create_message(
+                    role='system',
+                    content=self.system_prompt
+                )
+            ],
+            'agents': {},
+            'next_agent_id': 1
+        }
+
+        # Add user message if user prompt is set
+        if state.get('user_prompt'):
+            context_state['messages'].append(
+                self.ollama_agent.create_message(
+                    role='user',
+                    content=state['user_prompt']
+                )
+            )
+
+        return context_state
+
+    @traceable
     async def analyze_task(self, state: ContextState) -> ContextState:
         """
-        Analyze the incoming task and check if any existing agent is handling it.
+        Analyze the incoming task and invoke the LLM to make supervisor decisions.
 
-        This node determines if a task should be delegated to a new agent,
-        if an existing agent should continue, or if an agent should be cancelled.
+        This node:
+        1. Obtains context about current active agents.
+        2. Retrieves the system message from the initial messages.
+        3. Renders the system prompt with current agent context.
+        4. Calls the LLM with the updated messages.
 
         Parameters:
             state: The current context state.
 
         Returns:
-            ContextState: Updated state with analysis results.
+            ContextState: Updated state with LLM response.
         """
-        self._log('Analyzing incoming task...')
+        self._log('Analyzing task and processing supervisor decision...')
 
         # Build context about current agents
-        agents_context = 'Current active agents:\n'
+        agents_list = []
         if state['agents']:
             for agent_id, agent_info in state['agents'].items():
-                agents_context += (
-                    f"- Agent {agent_id}: {agent_info['query']} "
-                    f"(Status: {agent_info['status']})\n"
+                agents_list.append({
+                    'id': agent_id,
+                    'query': agent_info['query'],
+                    'status': agent_info['status']
+                })
+
+        # Find and extract the system message (first message with role='system')
+        system_message_content = None
+        for msg in state['messages']:
+            if msg.get('role') == 'system':
+                system_message_content = msg.get('content')
+                break
+
+        # Render the system prompt with agent context using Jinja2
+        template = Template(system_message_content or '')
+        rendered_system_prompt = template.render(agents=agents_list)
+
+        # Update the system message with the rendered content
+        updated_messages = []
+        system_message_updated = False
+        for msg in state['messages']:
+            if msg.get('role') == 'system' and not system_message_updated:
+                updated_messages.append(
+                    self.ollama_agent.create_message(
+                        role='system',
+                        content=rendered_system_prompt
+                    )
                 )
-        else:
-            agents_context += 'No active agents.\n'
+                system_message_updated = True
+            else:
+                updated_messages.append(msg)
 
-        # Add analysis prompt
-        analysis_prompt = f"""
-{agents_context}
+        state['messages'] = updated_messages
 
-Analyze the user's request and decide:
-1. If there's an agent already working on a similar task,
-   check if it should continue or be cancelled.
-2. If no agent is handling this task, decide if a new agent
-   should be created.
-3. If the task doesn't require agent management, skip.
-
-Use the appropriate tool:
-- create_agent(query="task description") to create a new agent
-- delete_agent(agent_id=X) to cancel an existing agent
-- skip_agent() if no agent action is needed
-"""
-
-        state['messages'].append(
-            self.ollama_agent.create_message(
-                role='user',
-                content=analysis_prompt
-            )
-        )
-
-        return state
-
-    @traceable
-    async def process_supervisor_decision(self, state: ContextState) -> ContextState:
-        """
-        Process the supervisor's decision through the Ollama agent.
-
-        Invokes the Ollama agent to generate a response based on the current
-        conversation state with available tools for agent management.
-
-        Parameters:
-            state: The current context state containing messages and agent information.
-
-        Returns:
-            ContextState: The updated state after agent processing.
-
-        Raises:
-            ValueError: If the Ollama agent invocation fails.
-        """
+        # Invoke Ollama with the updated messages
         try:
-            # Invoke Ollama with the Messages portion of the state
             messages_state: Messages = {'messages': state['messages']}
             result = await self.ollama_agent.invoke(state=messages_state)
             state['messages'] = result['messages']
@@ -409,27 +418,31 @@ Use the appropriate tool:
         await self.ollama_agent.retrieve_tools(lang_tools=supervisor_tools)
 
         # Define the supervisor workflow
-        workflow = StateGraph(ContextState)
+        workflow = StateGraph(
+            ContextState,
+            input_schema=InputState
+        )
 
         # Add nodes
+        workflow.add_node('set_initial_messages', self.set_initial_messages)
         workflow.add_node('analyze_task', self.analyze_task)
-        workflow.add_node('process_supervisor_decision', self.process_supervisor_decision)
         workflow.add_node('finalize_conversation', self.finalize_conversation)
 
         # Add edges between nodes
-        workflow.add_edge(START, 'analyze_task')
-        workflow.add_edge('analyze_task', 'process_supervisor_decision')
+        workflow.add_edge(START, 'set_initial_messages')
+        workflow.add_edge('set_initial_messages', 'analyze_task')
         # After an agent step, check end conditions and proceed accordingly
         workflow.add_conditional_edges(
-            'process_supervisor_decision',
+            'analyze_task',
             self.route_on_tool_call,
             {
-                'agent': 'process_supervisor_decision',
+                'agent': 'analyze_task',
                 'finish': 'finalize_conversation'
             },
         )
         workflow.add_edge('finalize_conversation', END)
 
-        # Compile the workflow into an executable graph
-        self.graph = workflow.compile()
+        # Compile the graph with memory persistence
+        memory = MemorySaver()
+        self.graph = workflow.compile(checkpointer=memory)  # type: ignore[assignment]
         self._log('Supervisor graph compiled successfully')
