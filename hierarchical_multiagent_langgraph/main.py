@@ -3,9 +3,8 @@
 import asyncio
 import time
 
-from hierarchical_multiagent_langgraph.supervisor import SupervisorManager
+from hierarchical_multiagent_langgraph.supervisor import SupervisorManager, ContextState
 from langgraph_base_ros.langgraph_ros_base import LangGraphRosBase
-from langgraph_base_ros.ollama_utils import Messages
 from llm_interactions_msgs.srv import CallAgent
 
 import rclpy
@@ -55,7 +54,7 @@ class HierarchicalMultiagent(LangGraphRosBase):
 
         self.get_logger().info('SupervisorManager graph created successfully...')
 
-    def _process_graph(self, initial_state: Messages) -> dict:
+    def _process_graph(self, initial_state: ContextState) -> dict:
         """
         Process the agent graph with the given initial state.
 
@@ -69,7 +68,7 @@ class HierarchicalMultiagent(LangGraphRosBase):
             self.supervisor_manager.graph.ainvoke(initial_state)
         )
 
-    def _process_graph_async(self, initial_state: Messages) -> None:
+    def _process_graph_async(self, initial_state: ContextState) -> None:
         """
         Process the agent graph asynchronously without blocking.
 
