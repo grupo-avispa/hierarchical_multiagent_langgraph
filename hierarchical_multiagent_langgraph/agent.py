@@ -1,7 +1,11 @@
+from enum import Enum
+from langgraph.graph import START, StateGraph, END
+from langchain.tools import tool
+from langsmith import traceable
+from ollama import Message
 from langgraph_base_ros.langgraph_base import LangGraphBase
 from langgraph_base_ros.ollama_utils import Ollama
-from enum import Enum
-
+from langgraph_base_ros.chat_template_render import Messages
 
 class AgentStatus(str, Enum):
     """Enumeration of possible agent statuses."""
@@ -10,7 +14,6 @@ class AgentStatus(str, Enum):
     RUNNING = 'running'
     SUCCESS = 'success'
     FAILURE = 'failure'
-
 
 class SinglePurposeAgent(LangGraphBase):
     """
@@ -39,17 +42,16 @@ class SinglePurposeAgent(LangGraphBase):
         Returns:
             None
         """
+        if ollama_agent is None:
+            raise ValueError('Ollama agent instance must be provided to LangGraphManager.')
+        
         super().__init__(
             logger=logger,
             ollama_agent=ollama_agent,
             max_steps=max_steps)
-        if self.ollama_agent is None:
-            raise ValueError('Ollama agent instance must be provided to LangGraphManager.')
-        self.ollama_agent: Ollama = self.ollama_agent
 
         self.id: int = -1  # Unique identifier for the agent
         self.status: AgentStatus = AgentStatus.IDLE  # Current status of the agent
-        self.query: str = ''  # The task or query assigned to this agent
 
     def set_id(self, agent_id: int) -> None:
         """
@@ -93,14 +95,170 @@ class SinglePurposeAgent(LangGraphBase):
         """
         self.status = status
 
-    async def make_graph(self):
-        """
-        Build and compile the LangGraph workflow for this agent.
+    # ========== LANGGRAPH NODES ==========
 
-        This method should be overridden by subclasses to define
-        the specific graph structure for the agent's task.
+    @traceable
+    async def query_response(self, query: str) -> Messages:
+        """
+        Generate LLM response based on conversation state.
+        Receives the current conversation message list from ollama agent
+        and updates state with LLM response.
+
+        Parameters:
+            state (Messages): Current conversation state with messages.
 
         Returns:
-            None
+            Messages: Updated state with agent response.
         """
-        pass
+        self.status = AgentStatus.RUNNING
+        # Invoke Ollama agent
+        try:
+            self.state = await self.ollama_agent.invoke(state=self.state)
+        except ValueError as e:
+            self._log(f"Error during Ollama agent invocation: {e}")
+            raise e
+        
+        return self.state
+    
+    @traceable
+    def manage_steps(self, state: Messages) -> str:
+        """
+        Determine the next step in the conversation flow.
+
+        Checks if the last message contains a tool call to decide whether
+        to continue querying or finish the interaction.
+
+        Parameters:
+            state (Messages): Current conversation state with messages.
+        Returns:
+            str: Next node to transition to ('query_response' or 'finish_ollama_interaction').
+        """
+        self.steps += 1
+        uc = 'finish'
+        self._log(f"Managing steps, current step: {self.steps}")
+        try:
+            # Check if the last message contains a tool call
+            if state['messages'] and state['messages'][-1]['role'] == 'tool':
+                if self.steps < self.max_steps:
+                    uc = 'agent'
+                else:
+                    self._log("Maximum steps reached, finishing interaction.")
+            else:
+                self._log("No tool call detected, finishing interaction.")
+                self._log("Final response from assistant:\n" +
+                        f"{state['messages'][-1]['content']}")
+            # Update messages count
+            self.messages_count = len(state['messages'])
+            self._log(f"Total messages in conversation: {self.messages_count}")
+        except Exception as e:
+            self._log(f"Error in manage_steps: {e}")
+            uc = 'finish'
+        return uc
+    
+    @traceable
+    async def finish_ollama_interaction(self, state: Messages) -> Messages:
+        """
+        Finalize the Ollama interaction and return the final response.
+
+        Parameters:
+            state (Messages): Current conversation state with messages.
+        Returns:
+            Messages: Final state after finishing interaction.
+        """
+
+        self._log("Finalizing Ollama interaction.")
+        if self.steps >= self.max_steps:
+            self._log("Maximum steps reached during finalization.")
+            self.status = AgentStatus.FAILURE
+        else:
+            self._log("Agent reached final state before maximum steps.")
+            self.status = AgentStatus.SUCCESS
+        self.steps = 0
+        self.ollama_agent.reset_memory()
+        return state
+    
+    # ========== GRAPH GENERATION ==========
+
+    async def make_graph(self):
+        """
+        Initialize and compile the LangGraph workflow.
+
+        This method creates a LangGraph StateGraph with nodes for query processing and
+        conversation finalization. It defines the flow of the conversation based on
+        LLM outputs and compiles the graph for execution.
+
+        Returns:
+            None: The compiled graph is stored in self.graph.
+        """
+
+        # Create the StateGraph workflow
+        workflow = StateGraph(Messages)
+
+        # Add graph nodes:
+        # - query_response: Main LLM reasoning node
+        workflow.add_node('query_response', self.query_response)
+        # - finish_ollama_interaction: Final node to end interaction
+        workflow.add_node('finish_ollama_interaction', self.finish_ollama_interaction)
+
+        # Define graph edges and flow:
+        # After start, proceed to query response
+        workflow.add_edge(START, 'query_response')
+        # After a agent step, check end conditions and proceed accordingly
+        workflow.add_conditional_edges(
+            'query_response',
+            self.manage_steps, 
+            {'agent': 'query_response', 'finish': 'finish_ollama_interaction'},
+        )
+
+        # Compile the graph workflow
+        self.graph = workflow.compile()
+    
+    # ========== LANGGRAPH TOOLS ==========
+    
+    @staticmethod
+    @tool("find_object",
+          description="Find the location of a specified object.",
+          args_schema={"type": "object",
+                       "properties": {
+                           "object_name": {
+                               "type": "string",
+                               "description": "Name of the object to find."
+                           }
+                       },
+                       "required": ["object_name"]})
+    def find_object(object_name: str) -> str:
+        """
+        Find the location of a specified object.
+
+        Parameters:
+            object_name (str): Name of the object to find.
+        Returns:
+            str: Location of the object.
+        """
+        # Implement the logic to find the object here
+        location = f"Object {object_name} is located in the kitchen."
+        return location
+    
+    @staticmethod
+    @tool("retrieve_information",
+          description="Retrieve information on a given topic.",
+          args_schema={"type": "object",
+                       "properties": {
+                           "topic": {
+                               "type": "string",
+                               "description": "Topic to retrieve information about."
+                           }
+                       },
+                       "required": ["topic"]})
+    def retrieve_information(topic: str) -> str:
+        """
+        Retrieve information on a given topic.
+
+        Parameters:
+            topic (str): Topic to retrieve information about.
+        Returns:
+            str: Retrieved information.
+        """
+        # Implement the logic to retrieve information here
+        info = f"Information about {topic}: It is a fascinating subject!"
+        return info
