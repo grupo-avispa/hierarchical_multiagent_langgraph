@@ -2,7 +2,6 @@ from enum import Enum
 from langgraph.graph import START, StateGraph, END
 from langchain.tools import tool
 from langsmith import traceable
-from ollama import Message
 from langgraph_base_ros.langgraph_base import LangGraphBase
 from langgraph_base_ros.ollama_utils import Ollama
 from langgraph_base_ros.chat_template_render import Messages
