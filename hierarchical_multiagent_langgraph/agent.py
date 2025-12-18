@@ -1,4 +1,5 @@
 from enum import Enum
+from pathlib import Path
 from langgraph.graph import START, StateGraph, END
 from langchain.tools import tool
 from langsmith import traceable
@@ -51,6 +52,7 @@ class SinglePurposeAgent(LangGraphBase):
 
         self.id: int = -1  # Unique identifier for the agent
         self.status: AgentStatus = AgentStatus.IDLE  # Current status of the agent
+        self._get_system_prompt() # Load system prompt
 
     def set_id(self, agent_id: int) -> None:
         """
@@ -94,10 +96,27 @@ class SinglePurposeAgent(LangGraphBase):
         """
         self.status = status
 
+    def _get_system_prompt(self) -> str:
+        """
+        Retrieve the system prompt for the agent.
+        Returns:
+            None: Sets the system prompt attribute.
+        """
+        # Get the templates directory path relative to this file
+        current_dir = Path(__file__).parent
+        templates_path = str(current_dir.parent / 'templates')
+        try:
+            with open(templates_path + '/agent_system_prompt.jinja', 'r') as f:
+                self.sys_prompt = f.read()
+        except FileNotFoundError:
+            self._log(f"Agent system prompt template not found at path: {templates_path + '/agent_system_prompt.jinja'}")
+            self.sys_prompt = "You are a helpful assistant designed to perform specific tasks."
+        return self.sys_prompt
+
     # ========== LANGGRAPH NODES ==========
 
     @traceable
-    async def query_response(self, query: str) -> Messages:
+    async def query_response(self, state: Messages) -> Messages:
         """
         Generate LLM response based on conversation state.
         Receives the current conversation message list from ollama agent
@@ -110,9 +129,19 @@ class SinglePurposeAgent(LangGraphBase):
             Messages: Updated state with agent response.
         """
         self.status = AgentStatus.RUNNING
+        # Check if any of the message roles is 'system'
+        has_sys_message = any(
+            (msg.role == 'system' and msg.content is not None)
+            for msg in state['messages'])
+        if not has_sys_message:
+            # Prepend system prompt if not already present
+            state['messages'].insert(0, {
+                'role': 'system',
+                'content': self.sys_prompt
+            }) 
         # Invoke Ollama agent
         try:
-            self.state = await self.ollama_agent.invoke(state=self.state)
+            self.state = await self.ollama_agent.invoke(state=state)
         except ValueError as e:
             self._log(f"Error during Ollama agent invocation: {e}")
             raise e
