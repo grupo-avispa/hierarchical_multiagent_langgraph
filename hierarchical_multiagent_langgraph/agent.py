@@ -52,6 +52,7 @@ class SinglePurposeAgent(LangGraphBase):
 
         self.id: int = -1  # Unique identifier for the agent
         self.status: AgentStatus = AgentStatus.IDLE  # Current status of the agent
+        self._generate_tools_list() # Generate tools list for the agent
         self._get_system_prompt() # Load system prompt
 
     def set_id(self, agent_id: int) -> None:
