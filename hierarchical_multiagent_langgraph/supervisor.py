@@ -1,14 +1,20 @@
 import asyncio
 from typing import TypedDict
+from pathlib import Path
 
 from jinja2 import Template
-from hierarchical_multiagent_langgraph.agent import SinglePurposeAgent, AgentStatus
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
-from langgraph_base_ros.langgraph_base import LangGraphBase
-from langgraph_base_ros.ollama_utils import Messages, Ollama
 from langsmith import traceable
+from ollama import Message
+
+from hierarchical_multiagent_langgraph.agent import SinglePurposeAgent, AgentStatus
+
+from langgraph_base_ros.langgraph_base import LangGraphBase
+from langgraph_base_ros.ollama_utils import Ollama
+from langgraph_base_ros.chat_template_render import Messages
+
 
 
 class InputState(TypedDict):
@@ -22,27 +28,26 @@ class InputState(TypedDict):
     user_prompt: str
 
 
-class ContextState(Messages):
-    """
-    Represents the context state of a conversation with hierarchical agents.
+# class ContextState(Messages):
+#     """
+#     Represents the context state of a conversation with hierarchical agents.
 
-    This state extends the base Messages state to include metadata
-    about active agents being managed.
+#     This state extends the base Messages state to include metadata
+#     about active agents being managed.
 
-    Attributes:
-        agents: Dictionary of active agents indexed by agent_id.
-        next_agent_id: Counter for assigning unique agent IDs.
-    """
+#     Attributes:
+#         agents: Dictionary of active agents indexed by agent_id.
+#         next_agent_id: Counter for assigning unique agent IDs.
+#     """
 
-    agents: dict[int, dict]
-    next_agent_id: int
+#     agents: dict[int, dict]
+#     next_agent_id: int
 
 
 class SupervisorManager(LangGraphBase):
 
     def __init__(
         self,
-        system_prompt: str,
         logger=None,
         ollama_agent: Ollama | None = None,
         max_steps: int = 5
@@ -70,96 +75,184 @@ class SupervisorManager(LangGraphBase):
         self.ollama_agent: Ollama = self.ollama_agent
         # Dictionary to store active agent instances
         self.active_agents: dict[int, SinglePurposeAgent] = {}
-        # Store prompt
-        self.system_prompt: str = system_prompt
+        # State for tracking agents (shared across tool calls)
+        self.agents_state: dict = {'agents': {}, 'next_agent_id': 1}
+        self._get_system_prompt()  # Load system prompt
+        # Create tools with access to self
+        self._supervisor_tools = self._create_supervisor_tools()
 
-    @tool(
-        'create_agent',
-        description='Creates a new agent to handle a specific task.')
-    def create_agent(self, state: ContextState, query: str) -> str:
+    def _get_system_prompt(self) -> str:
         """
-        Create a new agent to handle the specified task.
+        Retrieve the system prompt for the agent.
+        Returns:
+            None: Sets the system prompt attribute.
+        """
+        # Get the templates directory path relative to this file
+        current_dir = Path(__file__).parent
+        templates_path = str(current_dir.parent / 'templates')
+        try:
+            with open(templates_path + '/agent_system_prompt.jinja', 'r') as f:
+                self.sys_prompt = f.read()
+        except FileNotFoundError:
+            self._log(f"Agent system prompt template not found at path: {templates_path + '/agent_system_prompt.jinja'}")
+            self.sys_prompt = "You are a helpful assistant designed to perform specific tasks."
+        return self.sys_prompt
 
-        Parameters:
-            state: The current context state.
-            query: The task description for the new agent.
+    # ========== LANGGRAPH TOOLS ==========
+
+    def _create_supervisor_tools(self) -> list:
+        """
+        Create supervisor tools as closures with access to self.
+
+        This method creates tools dynamically, allowing them to access
+        instance attributes like ollama_agent, active_agents, and logger.
 
         Returns:
-            str: Confirmation message with the assigned agent ID.
+            list: List of tool dictionaries in the format expected by Ollama.
         """
-        agent_id = state['next_agent_id']
+        # Capture self in closure
+        supervisor = self
 
-        self._log(f'Creating agent {agent_id} for task: {query}')
-
-        # Create agent instance
-        new_agent = SinglePurposeAgent(
-            logger=self.logger,
-            ollama_agent=self.ollama_agent,
-            max_steps=self.max_steps
+        @tool(
+            'create_agent',
+            description='Creates a new agent to handle a specific task.'
         )
-        new_agent.set_id(agent_id)
-        new_agent.query = query
-        new_agent.set_status(AgentStatus.RUNNING)
+        def create_agent(query: str) -> str:
+            """
+            Create a new agent to handle the specified task.
 
-        # Store agent info in state
-        state['agents'][agent_id] = {
-            'id': agent_id,
-            'query': query,
-            'status': AgentStatus.RUNNING
-        }
+            Parameters:
+                query: The task description for the new agent.
 
-        # Store agent instance
-        self.active_agents[agent_id] = new_agent
+            Returns:
+                str: Confirmation message with the assigned agent ID.
+            """
+            agent_id = supervisor.agents_state['next_agent_id']
 
-        # Increment agent counter
-        state['next_agent_id'] += 1
+            supervisor._log(f'Creating agent {agent_id} for task: {query}')
 
-        # Invoke agent graph asynchronously
-        asyncio.create_task(self._run_agent(new_agent))
+            # Prepare initial state for the agent
+            initial_state : Messages = {
+                "messages": [
+                    Message(role="user", content=query)
+                ]
+            }
 
-        self._log(f'Agent {agent_id} created and started asynchronously')
+            # Create agent instance
+            new_agent = SinglePurposeAgent(
+                logger=supervisor.logger,
+                ollama_agent=supervisor.ollama_agent,
+                max_steps=supervisor.max_steps
+            )
+            new_agent.set_id(agent_id)
+            new_agent.set_status(AgentStatus.RUNNING)
 
-        return f'Agent {agent_id} created successfully for task: {query}'
+            # Store agent info in internal state
+            supervisor.agents_state['agents'][agent_id] = {
+                'id': agent_id,
+                'query': query,
+                'status': AgentStatus.RUNNING.value
+            }
 
-    @tool(
-        'delete_agent',
-        description='Deletes an existing agent by its ID.')
-    def delete_agent(self, state: ContextState, agent_id: int) -> str:
-        """
-        Delete an existing agent by its ID.
+            # Store agent instance
+            supervisor.active_agents[agent_id] = new_agent
 
-        Parameters:
-            state: The current context state.
-            agent_id: The ID of the agent to delete.
+            # Increment agent counter
+            supervisor.agents_state['next_agent_id'] += 1
 
-        Returns:
-            str: Confirmation message.
-        """
-        if agent_id in state['agents']:
-            self._log(f'Deleting agent {agent_id}')
-            agent_info = state['agents'][agent_id]
-            del state['agents'][agent_id]
-            if agent_id in self.active_agents:
-                del self.active_agents[agent_id]
-            return f'Agent {agent_id} deleted successfully (was working on: {agent_info["query"]})'
-        else:
-            self._log(f'Agent {agent_id} not found')
-            return f'Error: Agent {agent_id} not found'
+            # Invoke agent graph asynchronously
+            asyncio.create_task(supervisor._run_agent(new_agent, initial_state))
 
-    @tool(
-        'skip_agent',
-        description='Skip agent management for this iteration.')
-    def skip_agent(self) -> str:
-        """
-        Skip agent management for this iteration.
+            supervisor._log(f'Agent {agent_id} created and started asynchronously')
+            supervisor._log(f'Current state: {supervisor.agents_state}')
 
-        Returns:
-            str: Confirmation message.
-        """
-        self._log('Skipping agent action')
-        return 'No agent action needed for this request'
+            return f'Agent {agent_id} created successfully for task: {query}'
 
-    async def _run_agent(self, agent: SinglePurposeAgent) -> None:
+        @tool(
+            'delete_agent',
+            description='Deletes an existing agent by its ID.'
+        )
+        def delete_agent(agent_id: int) -> str:
+            """
+            Delete an existing agent by its ID.
+
+            Parameters:
+                agent_id: The ID of the agent to delete.
+
+            Returns:
+                str: Confirmation message.
+            """
+            if agent_id in supervisor.agents_state['agents']:
+                supervisor._log(f'Deleting agent {agent_id}')
+                agent_info = supervisor.agents_state['agents'][agent_id]
+                del supervisor.agents_state['agents'][agent_id]
+                if agent_id in supervisor.active_agents:
+                    del supervisor.active_agents[agent_id]
+                return f'Agent {agent_id} deleted successfully (was working on: {agent_info["query"]})'
+            else:
+                supervisor._log(f'Agent {agent_id} not found')
+                return f'Error: Agent {agent_id} not found'
+
+        @tool(
+            'skip_agent',
+            description='Skip agent management for this iteration.'
+        )
+        def skip_agent() -> str:
+            """
+            Skip agent management for this iteration.
+
+            Returns:
+                str: Confirmation message.
+            """
+            supervisor._log('Skipping agent action')
+            return 'No agent action needed for this request'
+
+        # Return tools in the format expected by Ollama
+        return [
+            {
+                'name': 'create_agent',
+                'description': 'Creates a new agent to handle a specific task.',
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {
+                        'query': {
+                            'type': 'string',
+                            'description': 'The task description for the new agent.'
+                        }
+                    },
+                    'required': ['query']
+                },
+                'tool_object': create_agent
+            },
+            {
+                'name': 'delete_agent',
+                'description': 'Deletes an existing agent by its ID.',
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {
+                        'agent_id': {
+                            'type': 'integer',
+                            'description': 'The ID of the agent to delete.'
+                        }
+                    },
+                    'required': ['agent_id']
+                },
+                'tool_object': delete_agent
+            },
+            {
+                'name': 'skip_agent',
+                'description': 'Skip agent management for this iteration.',
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {},
+                    'required': []
+                },
+                'tool_object': skip_agent
+            }
+        ]
+
+    async def _run_agent(self, agent: SinglePurposeAgent, 
+                         initial_state: Messages) -> None:
         """
         Run an agent's graph asynchronously.
 
@@ -176,17 +269,19 @@ class SupervisorManager(LangGraphBase):
 
             # Run the agent's graph
             # This is a placeholder - implement actual graph invocation
-            self._log(f'Agent {agent.get_id()} executing task: {agent.query}')
+            self._log(f'Agent {agent.get_id()} executing task ...')
+
+            await agent.graph.ainvoke(initial_state)
 
             # Update agent status
-            agent.set_status(AgentStatus.SUCCESS)
+            # agent.set_status(AgentStatus.SUCCESS)
 
         except Exception as e:
             self._log(f'Error running agent {agent.get_id()}: {e}')
             agent.set_status(AgentStatus.FAILURE)
 
     @traceable
-    async def set_initial_messages(self, state: InputState) -> ContextState:
+    async def set_initial_messages(self, state: InputState) -> Messages:
         """
         Set initial messages from stored prompts and return the initial conversation state.
 
@@ -198,43 +293,50 @@ class SupervisorManager(LangGraphBase):
             state: The input state containing optional user prompt.
 
         Returns:
-            ContextState: The initialized conversation state with system and user messages.
+            Messages: The initialized conversation state with system and user messages.
         """
         # Extract user query from input state
         user_query = state.get('user_prompt', '')
 
+        # Build context about current agents
+        agents_list = [
+            {
+                'id': agent_id,
+                'query': agent_info['query'],
+                'status': agent_info['status']
+            }
+            for agent_id, agent_info in self.agents_state['agents'].items()
+        ]
+        
         # Render the system prompt with initial context (empty agents list)
-        template = Template(self.system_prompt)
+        template = Template(self.sys_prompt)
         rendered_system_prompt = template.render(
-            agents_context=[],
-            user_query=user_query
+            agents_context=agents_list
         )
 
         # Create initial context state with rendered system prompt
-        context_state: ContextState = {
+        state: Messages = {
             'messages': [
-                self.ollama_agent.create_message(
+                Message(
                     role='system',
                     content=rendered_system_prompt
                 )
-            ],
-            'agents': {},
-            'next_agent_id': 1
+            ]
         }
 
         # Add user message if user prompt is set
         if user_query:
-            context_state['messages'].append(
-                self.ollama_agent.create_message(
+            state['messages'].append(
+                Message(
                     role='user',
                     content=user_query
                 )
             )
 
-        return context_state
+        return state
 
     @traceable
-    async def analyze_task(self, state: ContextState) -> ContextState:
+    async def analyze_task(self, state: Messages) -> Messages:
         """
         Analyze the incoming task and invoke the LLM to make supervisor decisions.
 
@@ -246,58 +348,13 @@ class SupervisorManager(LangGraphBase):
             state: The current context state.
 
         Returns:
-            ContextState: Updated state with LLM response.
+            Messages: Updated state with LLM response.
         """
         self._log('Analyzing task and processing supervisor decision...')
 
-        # Re-render system prompt only if there are active agents (context changed)
-        if state['agents']:
-            # Build context about current agents
-            agents_list = [
-                {
-                    'id': agent_id,
-                    'query': agent_info['query'],
-                    'status': agent_info['status']
-                }
-                for agent_id, agent_info in state['agents'].items()
-            ]
-
-            # Extract user query from the last user message
-            user_query = ''
-            for msg in reversed(state['messages']):
-                if msg.get('role') == 'user':
-                    user_query = msg.get('content', '')
-                    break
-
-            # Re-render the system prompt with updated agent context
-            template = Template(self.system_prompt)
-            rendered_system_prompt = template.render(
-                agents_context=agents_list,
-                user_query=user_query
-            )
-
-            # Update the system message with the rendered content
-            updated_messages = []
-            system_message_updated = False
-            for msg in state['messages']:
-                if msg.get('role') == 'system' and not system_message_updated:
-                    updated_messages.append(
-                        self.ollama_agent.create_message(
-                            role='system',
-                            content=rendered_system_prompt
-                        )
-                    )
-                    system_message_updated = True
-                else:
-                    updated_messages.append(msg)
-
-            state['messages'] = updated_messages
-
         # Invoke Ollama with the current messages
         try:
-            messages_state: Messages = {'messages': state['messages']}
-            result = await self.ollama_agent.invoke(state=messages_state)
-            state['messages'] = result['messages']
+            state = await self.ollama_agent.invoke(state=state)
         except ValueError as e:
             self._log(f'Error during Ollama agent invocation: {e}')
             raise e
@@ -319,19 +376,26 @@ class SupervisorManager(LangGraphBase):
             str: Next node to transition to ('agent' to continue, 'finish' to end).
         """
         self.steps += 1
-        uc = 'finish'
+        uc = 'agent'
         self._log(f'Managing steps, current step: {self.steps}')
         try:
             # Check if the last message contains a tool call
             if state['messages'] and state['messages'][-1]['role'] == 'tool':
-                if self.steps < self.max_steps:
-                    uc = 'agent'
-                else:
+                # Finish if tool call detected
+                self._log('Tool call detected in the last message.')
+                uc = 'finish'
+                if self.steps > self.max_steps:
                     self._log('Maximum steps reached, finishing interaction.')
             else:
-                self._log('No tool call detected, finishing interaction.')
+                self._log('No tool call detected, trying again.')
                 self._log(
                     'Final response from assistant:\n' + f"{state['messages'][-1]['content']}")
+                state['messages'].append(
+                    Message(
+                        role='user',
+                        content='Try again, remember to use the tools provided, you should not respond directly.'
+                    )
+                )
             # Update messages count
             self.messages_count = len(state['messages'])
             self._log(f'Total messages in conversation: {self.messages_count}')
@@ -341,7 +405,7 @@ class SupervisorManager(LangGraphBase):
         return uc
 
     @traceable
-    async def finalize_conversation(self, state: ContextState) -> ContextState:
+    async def finalize_conversation(self, state: Messages) -> Messages:
         """
         Finalize the conversation and clean up resources.
 
@@ -362,9 +426,9 @@ class SupervisorManager(LangGraphBase):
         self.ollama_agent.reset_memory()
 
         # Log summary of active agents
-        if state['agents']:
-            self._log(f"Active agents at completion: {len(state['agents'])}")
-            for agent_id, agent_info in state['agents'].items():
+        if self.agents_state['agents']:
+            self._log(f"Active agents at completion: {len(self.agents_state['agents'])}")
+            for agent_id, agent_info in self.agents_state['agents'].items():
                 self._log(
                     f"  Agent {agent_id}: {agent_info['query']} "
                     f"(Status: {agent_info['status']})"
@@ -390,56 +454,12 @@ class SupervisorManager(LangGraphBase):
         Returns:
             None
         """
-        # Initialize supervisor tools
-        supervisor_tools = [
-            {
-                'name': 'create_agent',
-                'description': 'Creates a new agent to handle a specific task.',
-                'inputSchema': {
-                    'type': 'object',
-                    'properties': {
-                        'query': {
-                            'type': 'string',
-                            'description': 'The task description for the new agent.'
-                        }
-                    },
-                    'required': ['query']
-                },
-                'tool_object': self.create_agent
-            },
-            {
-                'name': 'delete_agent',
-                'description': 'Deletes an existing agent by its ID.',
-                'inputSchema': {
-                    'type': 'object',
-                    'properties': {
-                        'agent_id': {
-                            'type': 'integer',
-                            'description': 'The ID of the agent to delete.'
-                        }
-                    },
-                    'required': ['agent_id']
-                },
-                'tool_object': self.delete_agent
-            },
-            {
-                'name': 'skip_agent',
-                'description': 'Skip agent management for this iteration.',
-                'inputSchema': {
-                    'type': 'object',
-                    'properties': {},
-                    'required': []
-                },
-                'tool_object': self.skip_agent
-            }
-        ]
-
-        # Retrieve tools from Ollama agent and merge with supervisor tools
-        await self.ollama_agent.retrieve_tools(lang_tools=supervisor_tools)
+        # Retrieve tools from Ollama agent using pre-created supervisor tools
+        await self.ollama_agent.retrieve_tools(lang_tools=self._supervisor_tools)
 
         # Define the supervisor workflow
         workflow = StateGraph(
-            ContextState,
+            Messages,
             input_schema=InputState
         )
 
