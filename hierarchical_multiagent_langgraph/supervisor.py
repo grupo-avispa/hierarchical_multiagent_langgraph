@@ -91,10 +91,10 @@ class SupervisorManager(LangGraphBase):
         current_dir = Path(__file__).parent
         templates_path = str(current_dir.parent / 'templates')
         try:
-            with open(templates_path + '/agent_system_prompt.jinja', 'r') as f:
+            with open(templates_path + '/supervisor_system_prompt.jinja', 'r') as f:
                 self.sys_prompt = f.read()
         except FileNotFoundError:
-            self._log(f"Agent system prompt template not found at path: {templates_path + '/agent_system_prompt.jinja'}")
+            self._log(f"Supervisor system prompt template not found at path: {templates_path + '/supervisor_system_prompt.jinja'}")
             self.sys_prompt = "You are a helpful assistant designed to perform specific tasks."
         return self.sys_prompt
 
