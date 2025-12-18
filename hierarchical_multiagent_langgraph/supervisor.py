@@ -50,7 +50,8 @@ class SupervisorManager(LangGraphBase):
         self,
         logger=None,
         ollama_agent: Ollama | None = None,
-        max_steps: int = 5
+        max_steps: int = 5,
+        ollama_agent_spa: Ollama | None = None,
     ) -> None:
         """
         Initialize the Supervisor Manager.
@@ -70,16 +71,17 @@ class SupervisorManager(LangGraphBase):
             logger=logger,
             ollama_agent=ollama_agent,
             max_steps=max_steps)
-        if self.ollama_agent is None:
-            raise ValueError('Ollama agent instance must be provided to LangGraphManager.')
+        if self.ollama_agent is None or ollama_agent_spa is None:
+            raise ValueError('Ollama agent instances must be provided to LangGraphManager.')
         self.ollama_agent: Ollama = self.ollama_agent
+        self.ollama_agent_spa: Ollama = ollama_agent_spa
         # Dictionary to store active agent instances
         self.active_agents: dict[int, SinglePurposeAgent] = {}
         # State for tracking agents (shared across tool calls)
         self.agents_state: dict = {'agents': {}, 'next_agent_id': 1}
         self._get_system_prompt()  # Load system prompt
         # Create tools with access to self
-        self._supervisor_tools = self._create_supervisor_tools()
+        self.supervisor_tools = self._create_supervisor_tools()
 
     def _get_system_prompt(self) -> str:
         """
@@ -89,7 +91,8 @@ class SupervisorManager(LangGraphBase):
         """
         # Get the templates directory path relative to this file
         current_dir = Path(__file__).parent
-        templates_path = str(current_dir.parent / 'templates')
+        # templates_path = str(current_dir.parent / 'templates')
+        templates_path = "/home/oscar/colcon_ws/src/interaction/hierarchical_multiagent_langgraph/templates"
         try:
             with open(templates_path + '/supervisor_system_prompt.jinja', 'r') as f:
                 self.sys_prompt = f.read()
@@ -137,11 +140,10 @@ class SupervisorManager(LangGraphBase):
                     Message(role="user", content=query)
                 ]
             }
-
             # Create agent instance
             new_agent = SinglePurposeAgent(
                 logger=supervisor.logger,
-                ollama_agent=supervisor.ollama_agent,
+                ollama_agent=supervisor.ollama_agent_spa,
                 max_steps=supervisor.max_steps
             )
             new_agent.set_id(agent_id)
@@ -280,6 +282,8 @@ class SupervisorManager(LangGraphBase):
             self._log(f'Error running agent {agent.get_id()}: {e}')
             agent.set_status(AgentStatus.FAILURE)
 
+    # ========== LANGGRAPH NODES ==========
+
     @traceable
     async def set_initial_messages(self, state: InputState) -> Messages:
         """
@@ -377,7 +381,8 @@ class SupervisorManager(LangGraphBase):
         """
         self.steps += 1
         uc = 'agent'
-        self._log(f'Managing steps, current step: {self.steps}')
+        self._log(f'SUPERVISOR: Managing steps, current step: {self.steps}')
+        self._log(f'SUPERVISOR: Managing steps, current messages: {state["messages"]}')
         try:
             # Check if the last message contains a tool call
             if state['messages'] and state['messages'][-1]['role'] == 'tool':
@@ -389,7 +394,7 @@ class SupervisorManager(LangGraphBase):
             else:
                 self._log('No tool call detected, trying again.')
                 self._log(
-                    'Final response from assistant:\n' + f"{state['messages'][-1]['content']}")
+                    'SUPERVISOR: Incorrect response from assistant:\n' + f"{state['messages'][-1]['content']}")
                 state['messages'].append(
                     Message(
                         role='user',
@@ -415,19 +420,19 @@ class SupervisorManager(LangGraphBase):
             state: Current context state.
 
         Returns:
-            ContextState: Final state after cleanup and finalization.
+            Messages: Final state after cleanup and finalization.
         """
-        self._log('Finalizing supervisor interaction.')
+        self._log('SUPERVISOR: Finalizing supervisor interaction.')
         if self.steps >= self.max_steps:
-            self._log('Maximum steps reached during finalization.')
+            self._log('SUPERVISOR: Maximum steps reached during finalization.')
         else:
-            self._log('Agent reached final state before maximum steps.')
+            self._log('SUPERVISOR: Agent reached final state before maximum steps.')
         self.steps = 0
         self.ollama_agent.reset_memory()
 
         # Log summary of active agents
         if self.agents_state['agents']:
-            self._log(f"Active agents at completion: {len(self.agents_state['agents'])}")
+            self._log(f"SUPERVISOR: Active agents at completion: {len(self.agents_state['agents'])}")
             for agent_id, agent_info in self.agents_state['agents'].items():
                 self._log(
                     f"  Agent {agent_id}: {agent_info['query']} "
@@ -437,9 +442,11 @@ class SupervisorManager(LangGraphBase):
             self._log('No active agents.')
 
         self.messages_count = len(state['messages'])
-        self._log(f'Total messages in conversation: {self.messages_count}')
+        self._log(f'SUPERVISOR: FINAL STEP Total messages in conversation: {self.messages_count}')
 
         return state
+    
+    # ========== GRAPH GENERATION ==========
 
     async def make_graph(self):
         """
@@ -454,8 +461,6 @@ class SupervisorManager(LangGraphBase):
         Returns:
             None
         """
-        # Retrieve tools from Ollama agent using pre-created supervisor tools
-        await self.ollama_agent.retrieve_tools(lang_tools=self._supervisor_tools)
 
         # Define the supervisor workflow
         workflow = StateGraph(

@@ -6,6 +6,7 @@ import time
 from hierarchical_multiagent_langgraph.supervisor import InputState, SupervisorManager
 from langgraph_base_ros.langgraph_ros_base import LangGraphRosBase
 from llm_interactions_msgs.srv import CallAgent
+from langgraph_base_ros.ollama_utils import Ollama
 
 import rclpy
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
@@ -17,14 +18,24 @@ class HierarchicalMultiagent(LangGraphRosBase):
     def __init__(self):
         """Initialize the LangGraph ROS node."""
         # Call the base class initializer
-        super().__init__('hierarchical_multiagent_node')
+        super().__init__()
 
+        ollama_agent_spa = Ollama(
+            model=self.ollama_agent.model,
+            raw=self.ollama_agent.raw,
+        )
         # Initialize the Supervisor Manager
         self.supervisor_manager = SupervisorManager(
-            system_prompt=self.system_prompt,
             logger=self.get_logger(),
             ollama_agent=self.ollama_agent,
-            max_steps=self.max_steps)
+            max_steps=self.max_steps,
+            ollama_agent_spa=ollama_agent_spa)
+        
+        # Retrieve tools for Ollama agent
+        self.loop.run_until_complete(
+            self.supervisor_manager.ollama_agent.retrieve_tools(
+                self.supervisor_manager.supervisor_tools
+            ))
 
         # Build the LangGraph workflow
         self.build_graph()
@@ -84,9 +95,10 @@ class HierarchicalMultiagent(LangGraphRosBase):
             None
         """
         config = {'configurable': {'thread_id': thread_id}}
-        asyncio.create_task(
+        result = self.loop.run_until_complete(
             self.supervisor_manager.graph.ainvoke(input_state, config=config)
         )
+        print(f'Asynchronous processing result: {result}')
 
     def agent_callback(self, request, response):
         """

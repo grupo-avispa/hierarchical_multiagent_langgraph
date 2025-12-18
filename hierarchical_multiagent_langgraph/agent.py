@@ -3,6 +3,7 @@ from pathlib import Path
 from langgraph.graph import START, StateGraph, END
 from langchain.tools import tool
 from langsmith import traceable
+from ollama import Message
 from langgraph_base_ros.langgraph_base import LangGraphBase
 from langgraph_base_ros.ollama_utils import Ollama
 from langgraph_base_ros.chat_template_render import Messages
@@ -54,6 +55,7 @@ class SinglePurposeAgent(LangGraphBase):
         self.status: AgentStatus = AgentStatus.IDLE  # Current status of the agent
         self._generate_tools_list() # Generate tools list for the agent
         self._get_system_prompt() # Load system prompt
+        self.ollama_agent.retrieve_tools(self.lang_tools)  # Retrieve tools for the agent
 
     def set_id(self, agent_id: int) -> None:
         """
@@ -105,7 +107,8 @@ class SinglePurposeAgent(LangGraphBase):
         """
         # Get the templates directory path relative to this file
         current_dir = Path(__file__).parent
-        templates_path = str(current_dir.parent / 'templates')
+        # templates_path = str(current_dir.parent / 'templates')
+        templates_path = "/home/oscar/colcon_ws/src/interaction/hierarchical_multiagent_langgraph/templates"
         try:
             with open(templates_path + '/agent_system_prompt.jinja', 'r') as f:
                 self.sys_prompt = f.read()
@@ -129,19 +132,20 @@ class SinglePurposeAgent(LangGraphBase):
         Returns:
             Messages: Updated state with agent response.
         """
-        self.status = AgentStatus.RUNNING
-        # Check if any of the message roles is 'system'
-        has_sys_message = any(
-            (msg.role == 'system' and msg.content is not None)
-            for msg in state['messages'])
-        if not has_sys_message:
-            # Prepend system prompt if not already present
-            state['messages'].insert(0, {
-                'role': 'system',
-                'content': self.sys_prompt
-            }) 
+        self.status = AgentStatus.RUNNING 
+        print( f"AGENT {self.id}: Invoking Ollama agent with state: {state}" )
         # Invoke Ollama agent
         try:
+            # Check if any of the message roles is 'system'
+            has_sys_message = any(
+                (msg['role'] == 'system' and msg['content'] is not None)
+                for msg in state['messages'])
+            if not has_sys_message:
+                # Prepend system prompt if not already present
+                state['messages'].insert(0, Message(
+                    role='system',
+                    content=self.sys_prompt
+                ))
             self.state = await self.ollama_agent.invoke(state=state)
         except ValueError as e:
             self._log(f"Error during Ollama agent invocation: {e}")
