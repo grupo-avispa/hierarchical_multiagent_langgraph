@@ -1,0 +1,31 @@
+langgraph_agent_node:
+  ros__parameters:
+    # Server name
+    service_name: "agent_service"
+    
+    # MCP servers configuration file path
+    mcp_servers: "langgraph_mcp.json"
+
+    # Model chat template file path
+    template_type: "qwen3"
+    
+    # LLM model name (for Ollama)
+    llm_model: "qwen3:8b"
+    
+    # Tool call regex pattern to extract tool calls from LLM response
+    tool_call_pattern: "<tool_call>(.*?)</tool_call>"
+    
+    debug_mode: true
+    # Ollama generation parameters
+    raw_mode: false
+    debug_mode: false
+    temperature: 0.0
+    repeat_penalty: 1.1
+    top_k: 10
+    top_p: 0.25
+    num_ctx: 8192
+    num_predict: 1024
+    
+    # LangGraph workflow parameters
+    max_steps: 5
+    enable_thinking: false
