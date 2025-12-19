@@ -55,7 +55,7 @@ class SinglePurposeAgent(LangGraphBase):
         self.status: AgentStatus = AgentStatus.IDLE  # Current status of the agent
         self._generate_tools_list() # Generate tools list for the agent
         self._get_system_prompt() # Load system prompt
-        self.ollama_agent.retrieve_tools(self.lang_tools)  # Retrieve tools for the agent
+        # Note: retrieve_tools must be called asynchronously after initialization
 
     def set_id(self, agent_id: int) -> None:
         """
@@ -133,7 +133,7 @@ class SinglePurposeAgent(LangGraphBase):
             Messages: Updated state with agent response.
         """
         self.status = AgentStatus.RUNNING 
-        print( f"AGENT {self.id}: Invoking Ollama agent with state: {state}" )
+        # print( f"AGENT {self.id}: Invoking Ollama agent with state: {state}" )
         # Invoke Ollama agent
         try:
             # Check if any of the message roles is 'system'
@@ -148,7 +148,7 @@ class SinglePurposeAgent(LangGraphBase):
                 ))
             self.state = await self.ollama_agent.invoke(state=state)
         except ValueError as e:
-            self._log(f"Error during Ollama agent invocation: {e}")
+            self._log(f"AGENT: Error during Ollama agent invocation: {e}")
             raise e
         
         return self.state
@@ -168,23 +168,23 @@ class SinglePurposeAgent(LangGraphBase):
         """
         self.steps += 1
         uc = 'finish'
-        self._log(f"Managing steps, current step: {self.steps}")
+        self._log(f"AGENT: Managing steps, current step: {self.steps}")
         try:
             # Check if the last message contains a tool call
             if state['messages'] and state['messages'][-1]['role'] == 'tool':
                 if self.steps < self.max_steps:
                     uc = 'agent'
                 else:
-                    self._log("Maximum steps reached, finishing interaction.")
+                    self._log("AGENT: Maximum steps reached, finishing interaction.")
             else:
-                self._log("No tool call detected, finishing interaction.")
-                self._log("Final response from assistant:\n" +
+                self._log("AGENT: No tool call detected, finishing interaction.")
+                self._log("AGENT: Final response from assistant:\n" +
                         f"{state['messages'][-1]['content']}")
             # Update messages count
             self.messages_count = len(state['messages'])
-            self._log(f"Total messages in conversation: {self.messages_count}")
+            self._log(f"AGENT: Total messages in conversation: {self.messages_count}")
         except Exception as e:
-            self._log(f"Error in manage_steps: {e}")
+            self._log(f"AGENT: Error in manage_steps: {e}")
             uc = 'finish'
         return uc
     
@@ -201,10 +201,10 @@ class SinglePurposeAgent(LangGraphBase):
 
         self._log("Finalizing Ollama interaction.")
         if self.steps >= self.max_steps:
-            self._log("Maximum steps reached during finalization.")
+            self._log("AGENT: Maximum steps reached during finalization.")
             self.status = AgentStatus.FAILURE
         else:
-            self._log("Agent reached final state before maximum steps.")
+            self._log("AGENT: Agent reached final state before maximum steps.")
             self.status = AgentStatus.SUCCESS
         self.steps = 0
         self.ollama_agent.reset_memory()

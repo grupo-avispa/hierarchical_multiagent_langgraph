@@ -132,7 +132,7 @@ class SupervisorManager(LangGraphBase):
             """
             agent_id = supervisor.agents_state['next_agent_id']
 
-            supervisor._log(f'Creating agent {agent_id} for task: {query}')
+            supervisor._log(f'SUPERVISOR: Creating agent {agent_id} for task: {query}')
 
             # Prepare initial state for the agent
             initial_state : Messages = {
@@ -140,10 +140,17 @@ class SupervisorManager(LangGraphBase):
                     Message(role="user", content=query)
                 ]
             }
-            # Create agent instance
+            
+            # Create a new Ollama instance for this agent
+            agent_ollama = Ollama(
+                model=supervisor.ollama_agent_spa.model,
+                raw=supervisor.ollama_agent_spa.raw
+            )
+            
+            # Create agent instance with its own Ollama instance
             new_agent = SinglePurposeAgent(
                 logger=supervisor.logger,
-                ollama_agent=supervisor.ollama_agent_spa,
+                ollama_agent=agent_ollama,
                 max_steps=supervisor.max_steps
             )
             new_agent.set_id(agent_id)
@@ -162,11 +169,11 @@ class SupervisorManager(LangGraphBase):
             # Increment agent counter
             supervisor.agents_state['next_agent_id'] += 1
 
-            # Invoke agent graph asynchronously
+            # Invoke agent graph asynchronously (tools will be retrieved in _run_agent)
             asyncio.create_task(supervisor._run_agent(new_agent, initial_state))
 
-            supervisor._log(f'Agent {agent_id} created and started asynchronously')
-            supervisor._log(f'Current state: {supervisor.agents_state}')
+            supervisor._log(f'SUPERVISOR: Agent {agent_id} created and started asynchronously')
+            supervisor._log(f'SUPERVISOR: Current state: {supervisor.agents_state}')
 
             return f'Agent {agent_id} created successfully for task: {query}'
 
@@ -260,17 +267,20 @@ class SupervisorManager(LangGraphBase):
 
         Parameters:
             agent: The agent instance to run.
+            initial_state: Initial message state for the agent.
 
         Returns:
             None
         """
         try:
+            # Ensure tools are registered before building the graph
+            await agent.ollama_agent.retrieve_tools(agent.lang_tools)
+            
             # Build the agent's graph if not already built
             if agent.graph is None:
                 await agent.make_graph()
 
             # Run the agent's graph
-            # This is a placeholder - implement actual graph invocation
             self._log(f'Agent {agent.get_id()} executing task ...')
 
             await agent.graph.ainvoke(initial_state)
@@ -354,13 +364,13 @@ class SupervisorManager(LangGraphBase):
         Returns:
             Messages: Updated state with LLM response.
         """
-        self._log('Analyzing task and processing supervisor decision...')
+        self._log('SUPERVISOR: Analyzing task and processing supervisor decision...')
 
         # Invoke Ollama with the current messages
         try:
             state = await self.ollama_agent.invoke(state=state)
         except ValueError as e:
-            self._log(f'Error during Ollama agent invocation: {e}')
+            self._log(f'SUPERVISOR: Error during Ollama agent invocation: {e}')
             raise e
 
         return state
@@ -382,7 +392,7 @@ class SupervisorManager(LangGraphBase):
         self.steps += 1
         uc = 'agent'
         self._log(f'SUPERVISOR: Managing steps, current step: {self.steps}')
-        self._log(f'SUPERVISOR: Managing steps, current messages: {state["messages"]}')
+        # self._log(f'SUPERVISOR: Managing steps, current messages: {state["messages"]}')
         try:
             # Check if the last message contains a tool call
             if state['messages'] and state['messages'][-1]['role'] == 'tool':
@@ -403,9 +413,9 @@ class SupervisorManager(LangGraphBase):
                 )
             # Update messages count
             self.messages_count = len(state['messages'])
-            self._log(f'Total messages in conversation: {self.messages_count}')
+            self._log(f'SUPERVISOR: Total messages in conversation: {self.messages_count}')
         except Exception as e:
-            self._log(f'Error in manage_steps: {e}')
+            self._log(f'SUPERVISOR: Error in manage_steps: {e}')
             uc = 'finish'
         return uc
 

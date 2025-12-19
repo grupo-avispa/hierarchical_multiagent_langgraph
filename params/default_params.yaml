@@ -15,10 +15,9 @@ langgraph_agent_node:
     # Tool call regex pattern to extract tool calls from LLM response
     tool_call_pattern: "<tool_call>(.*?)</tool_call>"
     
-    debug_mode: true
     # Ollama generation parameters
-    raw_mode: false
-    debug_mode: false
+    raw_mode: False
+    debug_mode: True
     temperature: 0.0
     repeat_penalty: 1.1
     top_k: 10
@@ -28,4 +27,4 @@ langgraph_agent_node:
     
     # LangGraph workflow parameters
     max_steps: 5
-    enable_thinking: false
+    enable_thinking: False
