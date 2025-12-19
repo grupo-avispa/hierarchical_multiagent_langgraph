@@ -20,16 +20,16 @@ class HierarchicalMultiagent(LangGraphRosBase):
         # Call the base class initializer
         super().__init__()
 
-        ollama_agent_spa = Ollama(
-            model=self.ollama_agent.model,
-            raw=self.ollama_agent.raw,
-        )
+        self.get_spa_params()
+
         # Initialize the Supervisor Manager
         self.supervisor_manager = SupervisorManager(
             logger=self.get_logger(),
             ollama_agent=self.ollama_agent,
             max_steps=self.max_steps,
-            ollama_agent_spa=ollama_agent_spa)
+            system_prompt_path=self.system_prompt_file,
+            spa_params=self.spa_params
+        )
         
         # Retrieve tools for Ollama agent
         self.loop.run_until_complete(
@@ -150,7 +150,61 @@ class HierarchicalMultiagent(LangGraphRosBase):
             response.agent_response = 'Query submitted for processing'
 
         return response
+    
+    def get_spa_params(self) -> None:
+        """
+        Retrieve and configure ROS2 parameters relative to single purpose agents creation.
 
+        Declares and retrieves parameters from the ROS2 parameter server,
+        Logs each parameter value for verification.
+
+        Parameters:
+            None
+
+        Returns:
+            None
+        """
+        self.spa_params = {}
+        # Declare and retrieve MCP servers parameter
+        # self.declare_parameter('spa_mcp_servers', 'mcp.json')
+        # self.spa_params["mcp_servers"] = self.get_parameter(
+        #     'spa_mcp_servers').get_parameter_value().string_value
+        # self.get_logger().info(
+        #     f'The parameter spa_mcp_servers is set to: [{self.spa_params["mcp_servers"]}]')
+        
+        # Declare and retrieve system prompt template path parameter
+        self.declare_parameter('spa_system_prompt_file', 'system_prompt.jinja')
+        self.spa_params["system_prompt_file"] = self.get_parameter(
+            'spa_system_prompt_file').get_parameter_value().string_value
+        self.get_logger().info(
+            f'The parameter spa_system_prompt_file is set to: [{self.spa_params["system_prompt_file"]}]')
+
+        # Declare and retrieve model chat template file path parameter
+        self.declare_parameter('spa_template_type', 'qwen3')
+        self.spa_params["template_type"] = self.get_parameter(
+            'spa_template_type').get_parameter_value().string_value
+        self.get_logger().info(
+            f'The parameter spa_template_type is set to: [{self.spa_params["template_type"]}]')
+
+        # Declare and retrieve LLM model name parameter
+        self.declare_parameter('spa_llm_model', 'qwen3:0.6b')
+        self.spa_params["model"] = self.get_parameter(
+            'spa_llm_model').get_parameter_value().string_value
+        self.get_logger().info(
+            f'The parameter spa_llm_model is set to: [{self.spa_params["model"]}]')
+        # Declare tool call regex pattern to extract tool calls from LLM response
+        self.declare_parameter('spa_tool_call_pattern', '<tool_call>(.*?)</tool_call>')
+        self.spa_params["tool_call_pattern"] = self.get_parameter(
+            'spa_tool_call_pattern').get_parameter_value().string_value
+        self.get_logger().info(
+            f'The parameter spa_tool_call_pattern is set to: [{self.spa_params["tool_call_pattern"]}]')
+
+        # Declare and retrieve LangGraph workflow parameters
+        self.declare_parameter('spa_max_steps', 5)
+        self.spa_params["max_steps"] = self.get_parameter(
+            'spa_max_steps').get_parameter_value().integer_value
+        self.get_logger().info(
+            f'The parameter spa_max_steps is set to: [{self.spa_params["max_steps"]}]')
 
 def main(args=None) -> None:
     """

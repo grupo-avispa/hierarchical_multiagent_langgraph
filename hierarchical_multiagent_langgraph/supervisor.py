@@ -51,7 +51,8 @@ class SupervisorManager(LangGraphBase):
         logger=None,
         ollama_agent: Ollama | None = None,
         max_steps: int = 5,
-        ollama_agent_spa: Ollama | None = None,
+        system_prompt_path: str | None = None,
+        spa_params: dict | None = None
     ) -> None:
         """
         Initialize the Supervisor Manager.
@@ -70,36 +71,21 @@ class SupervisorManager(LangGraphBase):
         super().__init__(
             logger=logger,
             ollama_agent=ollama_agent,
-            max_steps=max_steps)
-        if self.ollama_agent is None or ollama_agent_spa is None:
-            raise ValueError('Ollama agent instances must be provided to LangGraphManager.')
+            max_steps=max_steps
+        )
+        if self.ollama_agent is None:
+            raise ValueError('Ollama agent instance must be provided to LangGraphManager.')
+        if spa_params is None:
+            raise ValueError('spa_params must be provided to SupervisorManager.')
+        self.spa_params = spa_params
         self.ollama_agent: Ollama = self.ollama_agent
-        self.ollama_agent_spa: Ollama = ollama_agent_spa
         # Dictionary to store active agent instances
         self.active_agents: dict[int, SinglePurposeAgent] = {}
         # State for tracking agents (shared across tool calls)
         self.agents_state: dict = {'agents': {}, 'next_agent_id': 1}
-        self._get_system_prompt()  # Load system prompt
+        self._get_system_prompt(system_prompt_path)  # Load system prompt to attribute sys_prompt
         # Create tools with access to self
         self.supervisor_tools = self._create_supervisor_tools()
-
-    def _get_system_prompt(self) -> str:
-        """
-        Retrieve the system prompt for the agent.
-        Returns:
-            None: Sets the system prompt attribute.
-        """
-        # Get the templates directory path relative to this file
-        current_dir = Path(__file__).parent
-        # templates_path = str(current_dir.parent / 'templates')
-        templates_path = "/home/oscar/colcon_ws/src/interaction/hierarchical_multiagent_langgraph/templates"
-        try:
-            with open(templates_path + '/supervisor_system_prompt.jinja', 'r') as f:
-                self.sys_prompt = f.read()
-        except FileNotFoundError:
-            self._log(f"Supervisor system prompt template not found at path: {templates_path + '/supervisor_system_prompt.jinja'}")
-            self.sys_prompt = "You are a helpful assistant designed to perform specific tasks."
-        return self.sys_prompt
 
     # ========== LANGGRAPH TOOLS ==========
 
@@ -140,18 +126,25 @@ class SupervisorManager(LangGraphBase):
                     Message(role="user", content=query)
                 ]
             }
+            # Extract parameters without modifying original dict
+            spa_max_steps = supervisor.spa_params.get("max_steps", 5)
+            spa_system_prompt_path = supervisor.spa_params.get("system_prompt_file")
             
+            # Create a copy of spa_params without max_steps and system_prompt_file
+            ollama_params = {k: v for k, v in supervisor.spa_params.items() 
+                           if k not in ["max_steps", "system_prompt_file"]}
+
             # Create a new Ollama instance for this agent
             agent_ollama = Ollama(
-                model=supervisor.ollama_agent_spa.model,
-                raw=supervisor.ollama_agent_spa.raw
+                **ollama_params
             )
             
             # Create agent instance with its own Ollama instance
             new_agent = SinglePurposeAgent(
                 logger=supervisor.logger,
                 ollama_agent=agent_ollama,
-                max_steps=supervisor.max_steps
+                max_steps=spa_max_steps,
+                system_prompt_path=spa_system_prompt_path
             )
             new_agent.set_id(agent_id)
             new_agent.set_status(AgentStatus.RUNNING)
@@ -169,10 +162,17 @@ class SupervisorManager(LangGraphBase):
             # Increment agent counter
             supervisor.agents_state['next_agent_id'] += 1
 
-            # Invoke agent graph asynchronously (tools will be retrieved in _run_agent)
-            asyncio.create_task(supervisor._run_agent(new_agent, initial_state))
+            # Schedule agent execution in background without waiting
+            # Use asyncio.ensure_future to schedule the coroutine without blocking
+            try:
+                loop = asyncio.get_event_loop()
+                loop.create_task(supervisor._run_agent(new_agent, initial_state))
+                supervisor._log(f'SUPERVISOR: Agent {agent_id} scheduled for execution')
+            except RuntimeError:
+                # If no event loop, log warning but continue
+                supervisor._log(f'WARNING: No event loop available to schedule agent {agent_id}')
 
-            supervisor._log(f'SUPERVISOR: Agent {agent_id} created and started asynchronously')
+            supervisor._log(f'SUPERVISOR: Agent {agent_id} created successfully')
             supervisor._log(f'SUPERVISOR: Current state: {supervisor.agents_state}')
 
             return f'Agent {agent_id} created successfully for task: {query}'
@@ -263,7 +263,7 @@ class SupervisorManager(LangGraphBase):
     async def _run_agent(self, agent: SinglePurposeAgent, 
                          initial_state: Messages) -> None:
         """
-        Run an agent's graph asynchronously.
+        Run an agent's graph asynchronously in the background.
 
         Parameters:
             agent: The agent instance to run.
@@ -272,25 +272,36 @@ class SupervisorManager(LangGraphBase):
         Returns:
             None
         """
+        agent_id = agent.get_id()
         try:
+            self._log(f'AGENT {agent_id}: Starting execution pipeline...')
+            
             # Ensure tools are registered before building the graph
+            self._log(f'AGENT {agent_id}: Retrieving tools...')
             await agent.ollama_agent.retrieve_tools(agent.lang_tools)
             
             # Build the agent's graph if not already built
             if agent.graph is None:
+                self._log(f'AGENT {agent_id}: Building graph...')
                 await agent.make_graph()
 
             # Run the agent's graph
-            self._log(f'Agent {agent.get_id()} executing task ...')
-
-            await agent.graph.ainvoke(initial_state)
-
-            # Update agent status
-            # agent.set_status(AgentStatus.SUCCESS)
+            self._log(f'AGENT {agent_id}: Executing task...')
+            result = await agent.graph.ainvoke(initial_state)
+            
+            # Update agent status based on execution result
+            final_status = agent.get_status()
+            self._log(f'AGENT {agent_id}: Task completed with status: {final_status}')
+            
+            # Update internal state
+            if agent_id in self.agents_state['agents']:
+                self.agents_state['agents'][agent_id]['status'] = final_status
 
         except Exception as e:
-            self._log(f'Error running agent {agent.get_id()}: {e}')
+            self._log(f'ERROR in AGENT {agent_id}: {e}')
             agent.set_status(AgentStatus.FAILURE)
+            if agent_id in self.agents_state['agents']:
+                self.agents_state['agents'][agent_id]['status'] = AgentStatus.FAILURE.value
 
     # ========== LANGGRAPH NODES ==========
 

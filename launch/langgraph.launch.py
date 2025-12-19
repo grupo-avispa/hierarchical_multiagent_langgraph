@@ -41,15 +41,16 @@ def generate_launch_description():
     
     # Getting directories and launch-files
     default_params_file = os.path.join(hierarchical_multiagent_langgraph_dir, 'params', 'default_params.yaml')
-    # default_mcp_servers_file = os.path.join(hierarchical_multiagent_langgraph_dir, 'params', 'langgraph_mcp.json')
-    # default_sys_prompt_file = os.path.join(hierarchical_multiagent_langgraph_dir, 'templates', 'system_prompt.jinja')
-    # default_chat_template_file = os.path.join(hierarchical_multiagent_langgraph_dir, 'templates', 'qwen3.jinja')
+    default_mcp_servers_file = os.path.join(hierarchical_multiagent_langgraph_dir, 'params', 'langgraph_mcp.json')
+    default_supervisor_sys_prompt_file = os.path.join(hierarchical_multiagent_langgraph_dir, 'templates', 'supervisor_system_prompt.jinja')
+    default_agent_sys_prompt_file = os.path.join(hierarchical_multiagent_langgraph_dir, 'templates', 'agent_system_prompt.jinja')
 
     # Input parameters declaration
     params_file = LaunchConfiguration('params_file')
-    # mcp_servers_file = LaunchConfiguration('mcp_servers_file')
-    # sys_prompt_file = LaunchConfiguration('sys_prompt_file')
-    # chat_template_file = LaunchConfiguration('chat_template_file')
+    mcp_servers_file = LaunchConfiguration('mcp_servers_file')
+    spa_mcp_servers_file = LaunchConfiguration('spa_mcp_servers_file')
+    supervisor_sys_prompt_file = LaunchConfiguration('supervisor_sys_prompt_file')
+    agent_sys_prompt_file = LaunchConfiguration('agent_sys_prompt_file')
     log_level = LaunchConfiguration('log-level')
 
     declare_params_file_arg = DeclareLaunchArgument(
@@ -61,20 +62,26 @@ def generate_launch_description():
     # declare_mcp_servers_file_arg = DeclareLaunchArgument(
     #     'mcp_servers_file',
     #     default_value=default_mcp_servers_file,
-    #     description='Full path to the MCP servers configuration file'
+    #     description='Full path to the supervisor MCP servers configuration file'
     # )
 
-    # declare_sys_prompt_file_arg = DeclareLaunchArgument(
-    #     'sys_prompt_file',
-    #     default_value=default_sys_prompt_file,
-    #     description='Full path to the system prompt template file'
-    # )
+    declare_spa_mcp_servers_file_arg = DeclareLaunchArgument(
+        'spa_mcp_servers_file',
+        default_value=default_mcp_servers_file,
+        description='Full path to the agent MCP servers configuration file'
+    )
 
-    # declare_chat_template_file_arg = DeclareLaunchArgument(
-    #     'chat_template_file',
-    #     default_value=default_chat_template_file,
-    #     description='Full path to the chat template file'
-    # )
+    declare_supervisor_sys_prompt_file_arg = DeclareLaunchArgument(
+        'supervisor_sys_prompt_file',
+        default_value=default_supervisor_sys_prompt_file,
+        description='Full path to the supervisor system prompt template file'
+    )
+
+    declare_agent_sys_prompt_file_arg = DeclareLaunchArgument(
+        'agent_sys_prompt_file',
+        default_value=default_agent_sys_prompt_file,
+        description='Full path to the agent system prompt template file'
+    )
 
     declare_log_level_arg = DeclareLaunchArgument(
         name='log-level',
@@ -82,19 +89,20 @@ def generate_launch_description():
         description='Logging level (info, debug, ...)'
     )
 
-    # # Create our own temporary YAML files that include substitutions
-    # param_substitutions = {
-    #     'mcp_servers': mcp_servers_file,
-    #     'system_prompt_file': sys_prompt_file,
-    #     'model_chat_template_file': chat_template_file,
-    # }
+    # Create our own temporary YAML files that include substitutions
+    param_substitutions = {
+        # 'mcp_servers': mcp_servers_file,
+        'spa_mcp_servers': spa_mcp_servers_file,
+        'system_prompt_file': supervisor_sys_prompt_file,
+        'spa_system_prompt_file': agent_sys_prompt_file,
+    }
 
-    # configured_params = RewrittenYaml(
-    #     source_file=params_file,
-    #     root_key='',
-    #     param_rewrites=param_substitutions,
-    #     convert_types=True
-    # )
+    configured_params = RewrittenYaml(
+        source_file=params_file,
+        root_key='',
+        param_rewrites=param_substitutions,
+        convert_types=True
+    )
 
     # Prepare the langgraph agent node
     langgraph_agent_node = Node(
@@ -103,15 +111,16 @@ def generate_launch_description():
         name='langgraph_agent_node',
         output='screen',
         prefix=[venv_python, ' -u '],
-        parameters=[params_file],
+        parameters=[configured_params],
         arguments=['--ros-args', '--log-level', log_level],
     )
 
     return LaunchDescription([
         declare_params_file_arg,
         # declare_mcp_servers_file_arg,
-        # declare_sys_prompt_file_arg,
-        # declare_chat_template_file_arg,
+        declare_spa_mcp_servers_file_arg,
+        declare_supervisor_sys_prompt_file_arg,
+        declare_agent_sys_prompt_file_arg,
         declare_log_level_arg,
         langgraph_agent_node,
     ])

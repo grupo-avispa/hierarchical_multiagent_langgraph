@@ -30,7 +30,8 @@ class SinglePurposeAgent(LangGraphBase):
             self,
             logger=None,
             ollama_agent: Ollama | None = None,
-            max_steps: int = 5
+            max_steps: int = 5,
+            system_prompt_path: str | None = None
     ) -> None:
         """
         Initialize the Agent.
@@ -49,12 +50,13 @@ class SinglePurposeAgent(LangGraphBase):
         super().__init__(
             logger=logger,
             ollama_agent=ollama_agent,
-            max_steps=max_steps)
+            max_steps=max_steps,
+        )
 
         self.id: int = -1  # Unique identifier for the agent
         self.status: AgentStatus = AgentStatus.IDLE  # Current status of the agent
         self._generate_tools_list() # Generate tools list for the agent
-        self._get_system_prompt() # Load system prompt
+        self._get_system_prompt(system_prompt_path) # Load system prompt to attribute sys_prompt
         # Note: retrieve_tools must be called asynchronously after initialization
 
     def set_id(self, agent_id: int) -> None:
@@ -98,24 +100,6 @@ class SinglePurposeAgent(LangGraphBase):
             None
         """
         self.status = status
-
-    def _get_system_prompt(self) -> str:
-        """
-        Retrieve the system prompt for the agent.
-        Returns:
-            None: Sets the system prompt attribute.
-        """
-        # Get the templates directory path relative to this file
-        current_dir = Path(__file__).parent
-        # templates_path = str(current_dir.parent / 'templates')
-        templates_path = "/home/oscar/colcon_ws/src/interaction/hierarchical_multiagent_langgraph/templates"
-        try:
-            with open(templates_path + '/agent_system_prompt.jinja', 'r') as f:
-                self.sys_prompt = f.read()
-        except FileNotFoundError:
-            self._log(f"Agent system prompt template not found at path: {templates_path + '/agent_system_prompt.jinja'}")
-            self.sys_prompt = "You are a helpful assistant designed to perform specific tasks."
-        return self.sys_prompt
 
     # ========== LANGGRAPH NODES ==========
 
