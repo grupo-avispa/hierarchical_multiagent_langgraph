@@ -338,6 +338,9 @@ class SupervisorManager(LangGraphBase):
         rendered_system_prompt = template.render(
             agents_context=agents_list
         )
+        self._log(f'SUPERVISOR:\n--- Rendered system prompt  ---')
+        self._log(f'\n\n{rendered_system_prompt}\n')
+        self._log(f'\n------------------------------')
 
         # Create initial context state with rendered system prompt
         state: Messages = {
