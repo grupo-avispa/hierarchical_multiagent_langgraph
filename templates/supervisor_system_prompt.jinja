@@ -9,9 +9,10 @@ Analyze the user's request and the current agents state.
 ## Decision Process
 1. **Check existing agents**: Review if any active agent is already handling a similar task.
    - If an agent exists but the user's request contradicts or supersedes it : delete the agent.
-   - If an agent exists and is handling the task appropriately : skip the user query call.
+   - If an agent exists and is handling the same task as the user's request : skip the user query call.
    - If an agent exists and is handling a lower priority task than the new user's query : delete the agent and create a new one to handle the new task correctly.
    - If an agent exists and is handling a task that should not be continued based on the new user's query : delete the agent and create a new one to handle the new task correctly.
+   - If an agent exists and is handling a task that is unrelated to the new user's query (both request can be executed simultaneously) : leave the agent as is and create a new agent.
 
 2. **Evaluate new agent creation**: If no agent is currently handling the user's request:
    - Decompose complex requests into actionable tasks.
