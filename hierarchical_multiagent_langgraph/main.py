@@ -22,6 +22,16 @@ class HierarchicalMultiagent(LangGraphRosBase):
 
         self.get_spa_params()
 
+        try:
+            self.loop.run_until_complete(self.initialize_mcp_client(
+                self.spa_mcp_servers,
+                self.spa_params
+            ))
+        except Exception as e:
+            self.get_logger().error(f'Failed to initialize mcp client for SPA: {e}')
+            raise
+
+
         # Initialize the Supervisor Manager
         self.supervisor_manager = SupervisorManager(
             logger=self.get_logger(),
@@ -164,13 +174,18 @@ class HierarchicalMultiagent(LangGraphRosBase):
         Returns:
             None
         """
-        self.spa_params = {}
+        # Initialize spa_params dictionary by copying agent_params
+        self.spa_params = self.agent_params.copy()
+        # Remove mcp_client from spa_params if it exists
+        if "mcp_client" in self.spa_params:
+            del self.spa_params["mcp_client"]
+
         # Declare and retrieve MCP servers parameter
-        # self.declare_parameter('spa_mcp_servers', 'mcp.json')
-        # self.spa_params["mcp_servers"] = self.get_parameter(
-        #     'spa_mcp_servers').get_parameter_value().string_value
-        # self.get_logger().info(
-        #     f'The parameter spa_mcp_servers is set to: [{self.spa_params["mcp_servers"]}]')
+        self.declare_parameter('spa_mcp_servers', 'mcp.json')
+        self.spa_mcp_servers = self.get_parameter(
+            'spa_mcp_servers').get_parameter_value().string_value
+        self.get_logger().info(
+            f'The parameter spa_mcp_servers is set to: [{self.spa_mcp_servers}]')
         
         # Declare and retrieve system prompt template path parameter
         self.declare_parameter('spa_system_prompt_file', 'system_prompt.jinja')

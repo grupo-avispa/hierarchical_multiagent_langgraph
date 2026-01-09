@@ -41,7 +41,7 @@ def generate_launch_description():
     
     # Getting directories and launch-files
     default_params_file = os.path.join(hierarchical_multiagent_langgraph_dir, 'params', 'default_params.yaml')
-    default_mcp_servers_file = os.path.join(hierarchical_multiagent_langgraph_dir, 'params', 'langgraph_mcp.json')
+    default_mcp_servers_file = os.path.join(hierarchical_multiagent_langgraph_dir, 'params', 'spa_mcp.json')
     default_supervisor_sys_prompt_file = os.path.join(hierarchical_multiagent_langgraph_dir, 'templates', 'supervisor_system_prompt.jinja')
     default_agent_sys_prompt_file = os.path.join(hierarchical_multiagent_langgraph_dir, 'templates', 'agent_system_prompt.jinja')
 

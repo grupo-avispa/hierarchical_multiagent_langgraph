@@ -163,7 +163,6 @@ class SupervisorManager(LangGraphBase):
             supervisor.agents_state['next_agent_id'] += 1
 
             # Schedule agent execution in background without waiting
-            # Use asyncio.ensure_future to schedule the coroutine without blocking
             try:
                 loop = asyncio.get_event_loop()
                 loop.create_task(supervisor._run_agent(new_agent, initial_state))

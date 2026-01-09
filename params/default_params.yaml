@@ -4,7 +4,7 @@ langgraph_agent_node:
     service_name: "agent_service"
     
     # MCP servers configuration file path
-    spa_mcp_servers: "langgraph_mcp.json"
+    spa_mcp_servers: "spa_mcp.json"
     mcp_servers: ""
 
     # Model chat template file path
