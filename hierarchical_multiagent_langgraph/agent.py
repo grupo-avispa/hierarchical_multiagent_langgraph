@@ -61,7 +61,7 @@ class SinglePurposeAgent(LangGraphBase):
         self.id: int = -1  # Unique identifier for the agent
         self.status: AgentStatus = AgentStatus.IDLE  # Current status of the agent
         self.lang_tools = []
-        self._generate_tools_list() # Generate tools list for the agent
+        # self._generate_tools_list() # Generate tools list for the agent (uncomment for local tools use)
         self._get_system_prompt(system_prompt_path) # Load system prompt to attribute sys_prompt
         # Initialize MCP client if configuration is provided
         if mcp_servers_config is not None:
