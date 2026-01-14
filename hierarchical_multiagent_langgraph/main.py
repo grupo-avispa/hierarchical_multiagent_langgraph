@@ -1,9 +1,11 @@
 
 
 import asyncio
+import threading
 import time
 
-from hierarchical_multiagent_langgraph.supervisor import InputState, SupervisorManager
+from hierarchical_multiagent_langgraph.supervisor import (InputState, SupervisorManager, 
+    AgentTask, RunningAgentsState, FinishedAgentsState, Messages, SinglePurposeAgent)
 from langgraph_base_ros.langgraph_ros_base import LangGraphRosBase
 from llm_interactions_msgs.srv import CallAgent
 from langgraph_base_ros.ollama_utils import Ollama
@@ -22,14 +24,14 @@ class HierarchicalMultiagent(LangGraphRosBase):
 
         self.get_spa_params()
 
-        try:
-            self.loop.run_until_complete(self.initialize_mcp_client(
-                self.spa_mcp_servers,
-                self.spa_params
-            ))
-        except Exception as e:
-            self.get_logger().error(f'Failed to initialize mcp client for SPA: {e}')
-            raise
+        # try:
+        #     self.loop.run_until_complete(self.initialize_mcp_client(
+        #         self.spa_mcp_servers,
+        #         self.spa_params
+        #     ))
+        # except Exception as e:
+        #     self.get_logger().error(f'Failed to initialize mcp client for SPA: {e}')
+        #     raise
 
 
         # Initialize the Supervisor Manager
@@ -38,7 +40,8 @@ class HierarchicalMultiagent(LangGraphRosBase):
             ollama_agent=self.ollama_agent,
             max_steps=self.max_steps,
             system_prompt_path=self.system_prompt_file,
-            spa_params=self.spa_params
+            spa_params=self.spa_params, 
+            loop=self.loop
         )
         
         # Retrieve tools for Ollama agent
@@ -59,7 +62,69 @@ class HierarchicalMultiagent(LangGraphRosBase):
             callback_group=self.group
         )
 
+        # Create timer to consume pending agents from the queue
+        # Uses ReentrantCallbackGroup to allow concurrent execution
+        self.agent_timer = self.create_timer(
+            1.0,  # Timer period in seconds
+            self._agent_execution_timer_callback,
+            callback_group=self.group
+        )
+
         self.get_logger().info('Hierarchical Multiagent LangGraph Node has been started.')
+
+    def _agent_execution_timer_callback(self) -> None:
+        """
+        Timer callback to consume and execute pending agents.
+
+        This callback is triggered periodically by the ROS2 timer. It checks
+        the pending agents queue and spawns a new thread to execute each
+        pending agent with its own event loop. This ensures agents run
+        independently from the supervisor's event loop.
+
+        Returns:
+            None
+        """
+        # Try to get a pending agent from the list
+        agent_idle = None
+        self.supervisor_manager.agent_lists_lock.acquire()
+        if len(self.supervisor_manager.pending_agents_list) > 0:
+            agent_idle = self.supervisor_manager.pending_agents_list.pop(0)
+        self.supervisor_manager.agent_lists_lock.release()
+
+        if agent_idle is not None:
+            agent_id = agent_idle.agent.get_id()
+            self.get_logger().info(
+                f'Timer: Starting execution of agent {agent_id} in thread' + 
+                f' [{threading.current_thread().name}]')
+            # Create a new event loop for this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+            # Schedule the agent execution coroutine in the new event loop
+            agent_task = loop.create_task(
+                self.supervisor_manager.run_agent(agent_idle.agent, 
+                                                  agent_idle.input_state))
+
+            # Create running agent object with all required fields
+            running_agent = RunningAgentsState(
+                agent_id=agent_id,
+                input_prompt=agent_idle.input_state['messages'][0]['content'],
+                coroutine_handler=agent_task,
+                event_loop=loop
+            )
+            
+            # Add to running agents list
+            self.supervisor_manager.agent_lists_lock.acquire()
+            self.supervisor_manager.running_agents_list.append(running_agent)
+            self.supervisor_manager.agent_lists_lock.release()
+
+            # Need to await the agent task to completion
+            try:
+                self.get_logger().info(f"working on agent [{agent_id}]" + 
+                f" in thread [{threading.current_thread().name}]...")
+                loop.run_until_complete(agent_task)
+            except asyncio.CancelledError:
+                self.get_logger().info(f'Agent {agent_id} execution was cancelled.')
 
     def build_graph(self) -> None:
         """
@@ -182,10 +247,10 @@ class HierarchicalMultiagent(LangGraphRosBase):
 
         # Declare and retrieve MCP servers parameter
         self.declare_parameter('spa_mcp_servers', 'mcp.json')
-        self.spa_mcp_servers = self.get_parameter(
+        self.spa_params["mcp_servers_config"] = self.get_parameter(
             'spa_mcp_servers').get_parameter_value().string_value
         self.get_logger().info(
-            f'The parameter spa_mcp_servers is set to: [{self.spa_mcp_servers}]')
+            f'The parameter spa_mcp_servers is set to: [{self.spa_params["mcp_servers_config"]}]')
         
         # Declare and retrieve system prompt template path parameter
         self.declare_parameter('spa_system_prompt_file', 'system_prompt.jinja')

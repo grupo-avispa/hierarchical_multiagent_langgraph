@@ -4,6 +4,10 @@ from langgraph.graph import START, StateGraph, END
 from langchain.tools import tool
 from langsmith import traceable
 from ollama import Message
+from jinja2 import Template
+from fastmcp import Client
+import asyncio
+import json
 from langgraph_base_ros.langgraph_base import LangGraphBase
 from langgraph_base_ros.ollama_utils import Ollama
 from langgraph_base_ros.chat_template_render import Messages
@@ -31,7 +35,8 @@ class SinglePurposeAgent(LangGraphBase):
             logger=None,
             ollama_agent: Ollama | None = None,
             max_steps: int = 5,
-            system_prompt_path: str | None = None
+            system_prompt_path: str | None = None,
+            mcp_servers_config: str | None = None
     ) -> None:
         """
         Initialize the Agent.
@@ -56,8 +61,21 @@ class SinglePurposeAgent(LangGraphBase):
         self.id: int = -1  # Unique identifier for the agent
         self.status: AgentStatus = AgentStatus.IDLE  # Current status of the agent
         self.lang_tools = []
-        # self._generate_tools_list() # Generate tools list for the agent
+        self._generate_tools_list() # Generate tools list for the agent
         self._get_system_prompt(system_prompt_path) # Load system prompt to attribute sys_prompt
+        # Initialize MCP client if configuration is provided
+        if mcp_servers_config is not None:
+            try:
+                # open json config file
+                with open(mcp_servers_config, 'r') as f:
+                    config_data = json.load(f)
+                self.ollama_agent.mcp_client = Client(config_data)
+                # loop = asyncio.get_event_loop()
+                # loop.run_until_complete(self.ollama_agent.mcp_client.__aenter__())
+                self._log('AGENT: MCP client initialized successfully')
+            except Exception as e:
+                self._log(f'Error initializing MCP client: {e}')
+                self.ollama_agent.mcp_client = None 
 
     def set_id(self, agent_id: int) -> None:
         """
@@ -117,7 +135,6 @@ class SinglePurposeAgent(LangGraphBase):
             Messages: Updated state with agent response.
         """
         self.status = AgentStatus.RUNNING 
-        # print( f"AGENT {self.id}: Invoking Ollama agent with state: {state}" )
         # Invoke Ollama agent
         try:
             # Check if any of the message roles is 'system'
@@ -125,10 +142,31 @@ class SinglePurposeAgent(LangGraphBase):
                 (msg['role'] == 'system' and msg['content'] is not None)
                 for msg in state['messages'])
             if not has_sys_message:
+                # Get resources
+                resources_content = []
+                if self.ollama_agent.mcp_client is not None:
+                    # await self.ollama_agent.mcp_client.__aenter__()
+                    try:
+                        async with self.ollama_agent.mcp_client as client:
+                            resources = await client.list_resources()
+                            for resource in resources:
+                                content = await client.read_resource(resource.uri)
+                                resources_content.append(
+                                    content[0].text)
+                    except Exception as e:
+                        self._log(f'Error retrieving MCP tools: {e}')
+                # Render system prompt with resources
+                template = Template(self.sys_prompt)
+                rendered_system_prompt = template.render(
+                    resources=resources_content
+                )
+                # self._log(f'AGENT{self.id}:\n--- Rendered system prompt  ---')
+                # self._log(f'\n\n{rendered_system_prompt}\n')
+                # self._log(f'\n------------------------------')
                 # Prepend system prompt if not already present
                 state['messages'].insert(0, Message(
                     role='system',
-                    content=self.sys_prompt
+                    content=rendered_system_prompt
                 ))
             self.state = await self.ollama_agent.invoke(state=state)
         except ValueError as e:
@@ -278,4 +316,6 @@ class SinglePurposeAgent(LangGraphBase):
         """
         # Implement the logic to retrieve information here
         info = f"Information about {topic}: It is a fascinating subject!"
+        import time
+        time.sleep(10) # Sleep 100 seconds to simulate long processing
         return info
