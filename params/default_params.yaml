@@ -12,8 +12,8 @@ langgraph_agent_node:
     template_type: "qwen3"
     
     # LLM model name (for Ollama)
-    spa_llm_model: "qwen3:0.6b"
-    llm_model: "qwen3:8b"
+    spa_llm_model: "qwen3:32b"
+    llm_model: "qwen3:32b"
     
     # Tool call regex pattern to extract tool calls from LLM response
     spa_tool_call_pattern: "<tool_call>(.*?)</tool_call>"
