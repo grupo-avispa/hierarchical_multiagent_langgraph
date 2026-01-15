@@ -31,37 +31,70 @@ from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 
 
 class HierarchicalMultiagent(LangGraphRosBase):
-    """ROS2 node for hierarchical multi-agent LangGraph coordination.
+    """
+    ROS2 node orchestrating a hierarchical multi-agent system using LangGraph.
 
-    This node implements a supervisor-based multi-agent system where a supervisor
+    This node implements a supervisor-based architecture where a single supervisor
     agent decomposes complex user queries into subtasks and coordinates multiple
-    single-purpose agents (SPAs) to execute them. Each agent runs in its own
-    thread with an independent event loop to ensure concurrency and isolation.
+    single-purpose agents (SPAs) for parallel execution. The supervisor uses LLM-based
+    reasoning to intelligently distribute work and synthesize final responses from
+    multiple agent outputs.
 
-    The node exposes a ROS2 service for receiving user queries and manages:
-    - Agent instantiation and lifecycle
-    - Task delegation to appropriate agents
-    - Response synthesis from multiple agent outputs
-    - Asynchronous and blocking execution modes
+    Architecture:
+        - Supervisor Agent: Analyzes user queries and creates/manages SPAs via tools.
+        - Single-Purpose Agents: Each executes a focused subtask assigned by supervisor.
+        - Event Loop Management: Each agent runs in isolated async context for concurrency.
+        - ROS2 Service Interface: Accepts queries via CallAgent service.
+
+    Execution Flow:
+        1. ROS2 service receives user query (CallAgent request).
+        2. Query forwarded to supervisor's LangGraph workflow.
+        3. Supervisor decides to create/delete agents based on LLM reasoning.
+        4. Created agents execute in background async tasks with thread isolation.
+        5. Results collected asynchronously from completed agents.
+        6. Supervisor synthesizes final response from agent results.
+        7. Response returned via ROS2 service callback.
+
+    Thread Safety:
+        Agent lists are protected by agent_lists_lock. Agent execution runs in
+        separate threads with independent event loops to prevent blocking the
+        ROS2 executor.
 
     Attributes:
-        supervisor_manager (SupervisorManager): Manages the supervisor agent
-            and the LangGraph workflow for task orchestration.
-        agent_lists_lock (threading.Lock): Synchronizes access to agent lists
-            between the main thread and agent execution threads.
-        pending_agents_list (list): Queue of agents waiting to be executed.
-        running_agents_list (list): List of currently executing agents.
-        agent_srv (rclpy.node.Service): ROS2 service for receiving user queries.
-        agent_timer (rclpy.node.TimerHandle): Timer for consuming pending agents.
-        spa_params (dict): Configuration parameters for single-purpose agents.
+        supervisor_manager (SupervisorManager): Manages supervisor agent and LangGraph workflow.
+        agent_lists_lock (threading.Lock): Mutex for concurrent access to agent lists.
+        pending_agents_list (list): Queue of agents created but not yet started.
+        running_agents_list (list): Agents currently executing their tasks.
+        agent_srv (rclpy.node.Service): ROS2 service endpoint for receiving queries.
+        agent_timer (rclpy.node.TimerHandle): Timer for periodically consuming pending agents.
+        spa_params (dict): Configuration passed to all SinglePurposeAgent instances.
+        loop (asyncio.AbstractEventLoop): Main event loop for supervisor execution.
+        max_steps (int): Maximum LangGraph steps for supervisor and agents.
+
+    Raises:
+        No explicit raises, but initialization failures in supervisor setup may
+        propagate from SupervisorManager or LangGraphBase parent classes.
     """
 
     def __init__(self):
-        """Initialize the Hierarchical Multiagent ROS2 node.
+        """
+        Initialize the Hierarchical Multiagent ROS2 node.
 
-        Sets up the supervisor manager, builds the LangGraph workflow,
-        creates ROS2 service for handling queries, and initializes the
-        agent execution timer.
+        Performs complete initialization sequence:
+        1. Calls parent class (LangGraphRosBase) initializer.
+        2. Retrieves SPA configuration parameters.
+        3. Creates SupervisorManager instance.
+        4. Retrieves tools available to supervisor from Ollama.
+        5. Builds the supervisor's LangGraph workflow.
+        6. Creates ROS2 service endpoint for receiving user queries.
+        7. Sets up timer for periodic agent consumption from queue.
+
+        After successful initialization, the node is ready to receive user queries
+        via ROS2 service and manage the hierarchical multi-agent execution.
+
+        Raises:
+            Various exceptions from parent class or SupervisorManager if
+            configuration loading, LLM connection, or LangGraph building fails.
         """
         # Call the base class initializer
         super().__init__()
@@ -108,15 +141,52 @@ class HierarchicalMultiagent(LangGraphRosBase):
 
     def _agent_execution_timer_callback(self) -> None:
         """
-        Timer callback to consume and execute pending agents.
+        Timer callback: consume pending agents from queue and execute in dedicated threads.
 
-        This callback is triggered periodically by the ROS2 timer. It checks
-        the pending agents queue and spawns a new thread to execute each
-        pending agent with its own event loop. This ensures agents run
-        independently from the supervisor's event loop.
+        Called periodically (every 1.0 second) by ROS2 timer. Implements producer-consumer
+        pattern: supervisor (producer) adds agents to pending_agents_list, this callback
+        (consumer) executes them. Each agent runs in its own thread with independent
+        asyncio event loop, preventing blocking of supervisor/ROS2 executor.
+
+        Execution Sequence:
+            1. Check pending_agents_list for queued agents (thread-safe with lock)
+            2. If agent pending: pop from queue
+            3. Create new asyncio.AbstractEventLoop for dedicated thread
+            4. Create task: loop.create_task(supervisor_manager.run_agent(...))
+            5. Wrap task in RunningAgentsState with loop reference
+            6. Add to running_agents_list (thread-safe with lock)
+            7. Block current thread: loop.run_until_complete(agent_task)
+            8. Wait for agent completion, handle cancellation
+
+        Thread Model:
+            - Callback runs in ROS2 executor's thread (MultiThreadedExecutor)
+            - Agent task (loop.run_until_complete) blocks callback thread temporarily
+            - Agent's asyncio operations don't block supervisor's main event loop
+            - Multiple agents can run concurrently in different timer callbacks
+
+        State Management:
+            - Reads: pending_agents_list (protected by agent_lists_lock)
+            - Writes: running_agents_list (protected by agent_lists_lock)
+            - Creates: RunningAgentsState with agent_id, input_prompt, task, loop
+            - Transitions: pending → running → finished (by supervisor_manager.run_agent)
+
+        Error Handling:
+            - Catches asyncio.CancelledError when agent is forcefully cancelled
+            - Logs cancellation status; cleanup handled by run_agent()
+            - Other exceptions propagate (ROS2 handles callback errors)
+
+        Parameters:
+            None: Uses instance state (supervisor_manager.pending_agents_list, etc.)
 
         Returns:
             None
+
+        Side Effects:
+            - Modifies pending_agents_list (pops one agent per callback)
+            - Modifies running_agents_list (appends RunningAgentsState)
+            - Creates new asyncio event loop for dedicated thread
+            - Blocks callback thread during agent execution
+            - Logs timer execution and agent status
         """
         # Try to get a pending agent from the list
         agent_idle = None
@@ -165,10 +235,39 @@ class HierarchicalMultiagent(LangGraphRosBase):
 
     def build_graph(self) -> None:
         """
-        Initialize and compile the LangGraph workflow.
+        Initialize and compile the supervisor's LangGraph workflow.
+
+        Calls supervisor_manager.make_graph() asynchronously in the main event loop
+        to construct the supervisor's state machine. The graph implements the
+        hierarchical multi-agent coordination workflow with nodes for initial setup,
+        task analysis, agent management (via tools), and response synthesis.
+
+        Graph Components:
+            - set_initial_messages: Initialize conversation state from user prompt
+            - analyze_task: LLM supervisor analyzes query and decides on agents
+            - route_on_tool_call: Route supervisor tool calls (create/delete agents)
+            - finalize_conversation: Aggregate agent results into final response
+
+        Compilation:
+            - Converts workflow definition to compiled graph (LangGraph)
+            - Prepares graph for invocation (ainvoke, invoke)
+            - Enables checkpoint/memory persistence via configurable thread_id
+
+        Error Handling:
+            - Catches and logs exceptions from make_graph()
+            - Re-raises exceptions to prevent node startup with incomplete graph
+            - Ensures node initialization fails fast on graph building errors
+
+        Parameters:
+            None: Uses supervisor_manager and main event loop
 
         Returns:
-            None
+            None: Compiled graph stored in supervisor_manager.graph
+
+        Side Effects:
+            - Populates supervisor_manager.graph with compiled LangGraph
+            - Logs success/failure of graph compilation
+            - May raise exceptions that propagate to __init__
         """
         # Initialize and compile the LangGraph workflow
         try:
@@ -181,14 +280,51 @@ class HierarchicalMultiagent(LangGraphRosBase):
 
     def _process_graph(self, input_state: InputState, thread_id: str) -> dict:
         """
-        Process the agent graph with the given input state.
+        Synchronously invoke supervisor's graph with blocking behavior.
+
+        Blocks until supervisor completes task analysis, agent creation/deletion,
+        agent result collection, and final response synthesis. Returns complete
+        execution results to caller. Used when ROS2 service caller needs response.
+
+        Graph Execution:
+            1. Supervisor initializes state from user_prompt
+            2. Supervisor analyzes task via LLM (query_response node)
+            3. Supervisor creates/deletes agents via tool calls (routing node)
+            4. Waits for agent results collection (via pending/running lists)
+            5. Synthesizes final response from agent outputs
+            6. Returns final message state
+
+        Checkpointing:
+            - Uses configurable thread_id for checkpoint persistence
+            - thread_id='supervisor' maintains supervisor context across calls
+            - Allows checkpoint storage/retrieval if configured
+
+        Blocking Model:
+            - run_until_complete(graph.ainvoke(...)) blocks calling thread
+            - Supervisor event loop executes until graph.END reached
+            - Agent execution happens asynchronously in separate threads
+            - Returns only when supervisor finishes response synthesis
 
         Parameters:
-            input_state: The input state containing user prompt.
-            thread_id: The thread ID for checkpoint persistence.
+            input_state (InputState): Initial state with 'user_prompt' key.
+                Format: {'user_prompt': 'user query string'}
+            thread_id (str): Checkpoint thread identifier for state persistence.
+                Typically 'supervisor' to maintain context.
 
         Returns:
-            dict: The result from the graph invocation.
+            dict: Final graph output state with 'messages' key containing
+                complete conversation history and final supervisor response.
+                Example: {'messages': [..., Message(role='assistant', content='final response')]}
+
+        Side Effects:
+            - Invokes supervisor_manager.graph.ainvoke()
+            - May trigger agent creation via supervisor tools
+            - Updates supervisor_manager agent lists during execution
+            - Maintains checkpoint state under thread_id
+
+        Note:
+            Blocks the calling thread (main ROS2 executor thread).
+            Use _process_graph_async() for non-blocking behavior.
         """
         config = {'configurable': {'thread_id': thread_id}}
         return self.loop.run_until_complete(
@@ -197,14 +333,47 @@ class HierarchicalMultiagent(LangGraphRosBase):
 
     def _process_graph_async(self, input_state: InputState, thread_id: str) -> None:
         """
-        Process the agent graph asynchronously without blocking.
+        Asynchronously invoke supervisor's graph without blocking caller.
+
+        Fire-and-forget execution: submits supervisor task and returns immediately.
+        Supervisor operates concurrently with other ROS2 callbacks. Results printed
+        to console after completion. Used when ROS2 caller doesn't need response
+        (response_needed=False in service call).
+
+        Execution Model:
+            - Invokes graph.ainvoke() but doesn't wait for completion
+            - Supervisor runs in main event loop background
+            - Caller returns immediately with acknowledgment
+            - Results logged/printed after supervisor finishes
+
+        Use Cases:
+            - Fire-and-forget queries: "turn on the light" (no response needed)
+            - Background tasks: data processing, monitoring without user wait
+            - Reduce latency: ROS2 callback can return quickly to executor
+
+        Limitation:
+            - Caller receives no direct result (only asynchronous console output)
+            - No error feedback to caller (errors logged only)
+            - Task runs but completion not guaranteed to caller
 
         Parameters:
-            input_state: The input state containing user prompt.
-            thread_id: The thread ID for checkpoint persistence.
+            input_state (InputState): Initial state with 'user_prompt'.
+                Format: {'user_prompt': 'user query string'}
+            thread_id (str): Checkpoint thread identifier for state persistence.
 
         Returns:
-            None
+            None: Returns immediately; actual processing continues in background.
+
+        Side Effects:
+            - Submits supervisor task to event loop
+            - Prints result to console (not returned to ROS2 caller)
+            - May trigger agent creation/execution in background
+            - Updates supervisor_manager agent lists during background execution
+
+        Note:
+            This implementation still blocks via run_until_complete().
+            For true non-blocking behavior, use asyncio.create_task() instead,
+            but this requires careful exception handling for background tasks.
         """
         config = {'configurable': {'thread_id': thread_id}}
         result = self.loop.run_until_complete(
@@ -214,18 +383,68 @@ class HierarchicalMultiagent(LangGraphRosBase):
 
     def agent_callback(self, request, response):
         """
-        Handle incoming service requests.
+        ROS2 service callback: process user queries and return supervisor responses.
 
-        Receives a user request, processes it using the agent graph,
-        and returns the generated response. The processing behavior depends
-        on the response_needed flag: if True, blocks until completion and
-        returns the response; if False, processes asynchronously.
+        Implements CallAgent service endpoint. Routes incoming user queries to
+        supervisor's LangGraph workflow for decomposition into agent subtasks.
+        Supports both blocking (wait for response) and non-blocking (fire-and-forget)
+        modes based on request.response_needed flag.
+
+        Request Fields:
+            - query (str): User's natural language query/task
+            - response_needed (bool): If True, block until completion and return response.
+                If False, submit asynchronously and return immediately.
+
+        Execution Flow (response_needed=True):
+            1. Extract query from request
+            2. Create InputState with user_prompt
+            3. Call _process_graph() (blocking)
+            4. Supervisor creates agents, collects results
+            5. Extract final response from result['messages'][-1]['content']
+            6. Log processing time and response
+            7. Return response to caller
+
+        Execution Flow (response_needed=False):
+            1. Extract query from request
+            2. Create InputState with user_prompt
+            3. Call _process_graph_async() (non-blocking)
+            4. Return immediately with "Query submitted for processing"
+            5. Supervisor executes in background
+            6. Results logged/printed but not returned to caller
+
+        Thread ID:
+            - Uses fixed thread_id='supervisor' for all calls
+            - Maintains supervisor checkpoint context across service calls
+            - Allows checkpoint persistence and state recovery
+
+        Response Population:
+            - response.agent_response set to final message content
+            - Extracted from result['messages'][-1].get('content', '')
+            - Empty string if no content (error handling)
+
+        Logging:
+            - Logs incoming query at DEBUG level
+            - Logs processing time (only blocking mode)
+            - Logs final response content
+            - Logs async submission message
 
         Parameters:
-            request: The CallAgent request containing query details.
-            response: The CallAgent response to be populated with the agent's reply.
+            request (CallAgent.Request): Service request with query and response_needed flag.
+            response (CallAgent.Response): Service response object to populate.
+
         Returns:
-            The populated response with the agent's generated reply.
+            CallAgent.Response: Populated response with agent_response field.
+
+        Side Effects:
+            - Invokes supervisor graph (may create agents, execute tools)
+            - Modifies agent_lists_lock protected lists
+            - Logs query processing and results
+            - Measures execution time (blocking mode)
+
+        Error Handling:
+            - Exceptions from graph processing propagate to ROS2 executor
+            - Malformed requests cause service exception (ROS2 handles)
+            - No try-except here; failures reported via ROS2 mechanisms
         """
         user_query = request.query
         response_needed = request.response_needed
@@ -265,16 +484,51 @@ class HierarchicalMultiagent(LangGraphRosBase):
 
     def get_spa_params(self) -> None:
         """
-        Retrieve and configure ROS2 parameters relative to single purpose agents creation.
+        Declare and retrieve ROS2 parameters for SinglePurposeAgent configuration.
 
-        Declares and retrieves parameters from the ROS2 parameter server,
-        Logs each parameter value for verification.
+        Loads SPA-specific configuration from ROS2 parameter server. Declares
+        parameters with defaults, retrieves actual values (from launch files,
+        param files, or defaults), and stores in self.spa_params dictionary.
+        All values logged for verification.
+
+        Parameters Loaded:
+            - spa_mcp_servers (str, default='mcp.json'): Path to MCP servers config
+            - spa_system_prompt_file (str, default='system_prompt.jinja'): Jinja2 template path
+            - spa_template_type (str, default='qwen3'): LLM chat template type
+            - spa_llm_model (str, default='qwen3:0.6b'): Model name for Ollama
+            - spa_tool_call_pattern (str, default='<tool_call>(.*?)</tool_call>'): Regex pattern
+            - spa_max_steps (int, default=5): Maximum LangGraph steps per agent
+
+        Configuration Source Hierarchy:
+            1. Launch file parameters (highest priority)
+            2. Parameter file (.yaml) parameters
+            3. Declared defaults (lowest priority)
+
+        State Updates:
+            - Copies self.agent_params (from parent class) to self.spa_params
+            - Removes mcp_client if present (managed separately)
+            - Adds/updates SPA-specific parameters
+
+        Logging:
+            - Logs each parameter name and value at INFO level
+            - Provides verification that correct values loaded
+            - Helps debug configuration issues
 
         Parameters:
-            None
+            None: Uses ROS2 parameter server via self.get_parameter()
 
         Returns:
-            None
+            None: Stores results in self.spa_params dictionary
+
+        Side Effects:
+            - Declares 6 ROS2 parameters (idempotent if already declared)
+            - Populates self.spa_params with loaded values
+            - Logs all parameter values to ROS2 logger
+
+        Usage Context:
+            - Called during HierarchicalMultiagent.__init__()
+            - Before SupervisorManager creation
+            - Provides config for all subsequent SPAs created by supervisor
         """
         # Initialize spa_params dictionary by copying agent_params
         self.spa_params = self.agent_params.copy()
@@ -328,17 +582,54 @@ class HierarchicalMultiagent(LangGraphRosBase):
 
 def main(args=None) -> None:
     """
-    Run the ROS2 agent.
+    Entry point: initialize ROS2 and run hierarchical multi-agent node.
 
-    Initialize the ROS2 context, create the agent node, and spin
-    until shutdown is requested. Uses a MultiThreadedExecutor
-    for concurrent callbacks.
+    Performs complete ROS2 initialization and node lifecycle management:
+    1. Initialize ROS2 context with rclpy.init()
+    2. Create HierarchicalMultiagent node instance
+    3. Create MultiThreadedExecutor for concurrent callback execution
+    4. Add node to executor
+    5. Spin executor until shutdown (Ctrl+C, external signal, or error)
+    6. Cleanup handled by rclpy (shutdown on exception or exit)
+
+    Execution Model:
+        - MultiThreadedExecutor allows ROS2 callbacks to run concurrently
+        - Supervisor timer callback (_agent_execution_timer_callback) runs periodically
+        - Agent callback (agent_callback) handles service requests from multiple callers
+        - Multiple agents can execute in parallel via timer callbacks
+
+    Error Handling:
+        - KeyboardInterrupt: User pressed Ctrl+C (expected shutdown)
+        - ExternalShutdownException: ROS2 received shutdown signal (expected)
+        - Exception: Any other error during node execution (unexpected)
+        - All cases: Print shutdown reason and exit cleanly
+
+    Node Lifecycle:
+        1. Initializes HierarchicalMultiagent() which:
+           - Creates supervisor manager
+           - Builds LangGraph workflow
+           - Registers ROS2 service
+           - Starts timer for agent execution
+        2. Executes until shutdown
+        3. Cleanup handled by rclpy.shutdown()
 
     Parameters:
-        args: Command-line arguments (optional).
+        args (list | None): Command-line arguments passed to rclpy.init().
+            None uses sys.argv. Typical: ['--ros-args', '--log-level', 'info']
 
     Returns:
-        None
+        None: Exits process via rclpy.shutdown() or exception
+
+    Side Effects:
+        - Initializes global ROS2 context (rclpy.init)
+        - Creates HierarchicalMultiagent node
+        - Registers ROS2 services and timers
+        - Blocks until shutdown (run forever in normal operation)
+        - Prints shutdown reason to console
+
+    Usage:
+        $ ros2 run hierarchical_multiagent_langgraph supervisor
+        # Node runs until Ctrl+C or external shutdown signal
     """
     rclpy.init(args=args)
 

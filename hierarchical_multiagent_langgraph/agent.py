@@ -1,3 +1,20 @@
+"""
+Single-purpose agent module for hierarchical multi-agent system using LangGraph.
+
+This module provides the SinglePurposeAgent class, which represents a specialized
+agent that focuses on a single task or query. Each agent has its own LangGraph
+workflow for processing tasks, accessing tools, and interacting with an LLM backend.
+
+Key components:
+    - SinglePurposeAgent: An agent instance that executes a specific task.
+    - AgentStatus: Enumeration of possible agent states (IDLE, RUNNING, SUCCESS, FAILURE).
+
+The agent supports:
+    - LLM-based reasoning through Ollama integration.
+    - Model Context Protocol (MCP) servers for extended tool capabilities.
+    - Tool execution and management via LangGraph workflows.
+    - Status tracking and result aggregation.
+"""
 
 from enum import Enum
 import json
@@ -14,7 +31,18 @@ from ollama import Message
 
 
 class AgentStatus(str, Enum):
-    """Enumeration of possible agent statuses."""
+    """
+    Enumeration of possible agent execution states.
+
+    Represents the lifecycle status of a SinglePurposeAgent during task execution.
+    Allows the supervisor to track agent progress and determine next actions.
+
+    Attributes:
+        IDLE (str): Agent has been created but has not yet started execution.
+        RUNNING (str): Agent is currently executing its assigned task.
+        SUCCESS (str): Agent successfully completed its task.
+        FAILURE (str): Agent encountered an error and could not complete the task.
+    """
 
     IDLE = 'idle'
     RUNNING = 'running'
@@ -24,12 +52,40 @@ class AgentStatus(str, Enum):
 
 class SinglePurposeAgent(LangGraphBase):
     """
-    Represents a single-purpose agent with its configuration and status.
+    A specialized agent that executes a single task or query using LangGraph workflows.
+
+    The SinglePurposeAgent is designed to handle a focused, well-defined task assigned
+    by a supervisor. It maintains its own state machine with LangGraph nodes for
+    reasoning, tool execution, and task completion. Each agent has a unique ID, query,
+    and status tracking for integration with hierarchical multi-agent systems.
+
+    Workflow:
+        1. initialize_messages: Sets up initial message state from the assigned task.
+        2. run_agent: Executes the main reasoning loop with LLM-based decision-making.
+        3. Tool execution: Calls available tools (local or MCP-based) to perform work.
+        4. finalize: Synthesizes results and transitions to SUCCESS or FAILURE state.
+
+    Tool Integration:
+        Supports both direct Python tools via langchain and extended tool capabilities
+        through Model Context Protocol (MCP) servers. Tools are loaded dynamically from
+        configuration files at initialization.
+
+    LLM Integration:
+        Uses Ollama LLM for agent reasoning, planning, and decision-making throughout
+        task execution. Respects max_steps limit to prevent infinite loops.
 
     Attributes:
-        agent_id: Unique identifier for the agent.
-        query: The task or query assigned to this agent.
-        status: Current status of the agent (IDLE, RUNNING, SUCCESS, or FAILURE).
+        id (int): Unique identifier assigned by supervisor. Initialized to -1.
+        status (AgentStatus): Current execution state (IDLE, RUNNING, SUCCESS, FAILURE).
+        lang_tools (list): Tools available to agent, loaded from configuration.
+        sys_prompt (str): System prompt from file guiding agent behavior and reasoning.
+        ollama_agent (Ollama): LLM instance for agent task reasoning and execution.
+        mcp_client (Client | None): Optional MCP client providing extended tool access.
+        max_steps (int): Maximum LangGraph steps before task termination.
+        logger: Optional ROS2 logger inherited from parent LangGraphBase.
+
+    Raises:
+        ValueError: If ollama_agent is not provided during initialization.
     """
 
     def __init__(
@@ -41,17 +97,32 @@ class SinglePurposeAgent(LangGraphBase):
             mcp_servers_config: str | None = None
     ) -> None:
         """
-        Initialize the Agent.
+        Initialize a SinglePurposeAgent instance.
+
+        Sets up the agent with LLM configuration, loads system prompt and tools,
+        and initializes MCP client if provided. The agent is ready for task
+        assignment after initialization.
 
         Parameters:
-            logger: Optional ROS2 logger to use for logging (default: None).
-            ollama_agent (Ollama): Instance of the Ollama agent for LLM interactions.
-            max_steps (int): Maximum allowed steps before finishing interaction.
-            system_prompt_path (str): Path to the system prompt file.
-            mcp_servers_config (str): Path to MCP servers configuration file.
+            logger: Optional ROS2 logger for debug/info output. If None,
+                inherits from parent class. Defaults to None.
+            ollama_agent (Ollama | None): Ollama LLM instance for agent
+                reasoning and task execution. Required. Defaults to None.
+            max_steps (int): Maximum LangGraph execution steps before task
+                termination. Prevents infinite loops. Defaults to 5.
+            system_prompt_path (str | None): Path to YAML/text file containing
+                system prompt that guides agent behavior. Defaults to None.
+            mcp_servers_config (str | None): Path to JSON file with Model Context
+                Protocol server configurations for extended tool access. If provided,
+                MCP client is initialized; if initialization fails, continues without
+                it. Defaults to None.
 
-        Returns:
-            None
+        Raises:
+            ValueError: If ollama_agent is not provided.
+
+        Note:
+            MCP client initialization failures are logged but do not prevent
+            agent initialization. The agent will function with available tools only.
         """
         if ollama_agent is None:
             raise ValueError('Ollama agent instance must be provided to LangGraphManager.')
@@ -84,10 +155,13 @@ class SinglePurposeAgent(LangGraphBase):
 
     def set_id(self, agent_id: int) -> None:
         """
-        Set the unique identifier for the agent.
+        Assign a unique identifier to the agent.
+
+        Called by supervisor during agent creation to set auto-generated ID.
+        ID is used for tracking, logging, and deletion requests.
 
         Parameters:
-            agent_id (int): Unique identifier to assign to the agent.
+            agent_id (int): Unique auto-incremented identifier assigned by supervisor.
 
         Returns:
             None
@@ -96,28 +170,32 @@ class SinglePurposeAgent(LangGraphBase):
 
     def get_id(self) -> int:
         """
-        Get the unique identifier of the agent.
+        Retrieve the agent's unique identifier.
 
         Returns:
-            int: The unique identifier of the agent.
+            int: The agent's unique ID assigned during creation, or -1 if not yet assigned.
         """
         return self.id
 
     def get_status(self) -> AgentStatus:
         """
-        Get the current status of the agent.
+        Retrieve the current execution status of the agent.
 
         Returns:
-            AgentStatus: The current status of the agent.
+            AgentStatus: Current status (IDLE, RUNNING, SUCCESS, or FAILURE).
+                Transitions from RUNNING→SUCCESS/FAILURE during execution.
         """
         return self.status
 
     def set_status(self, status: AgentStatus) -> None:
         """
-        Set the current status of the agent.
+        Update the agent's execution status.
+
+        Called during initialization (RUNNING) and finalization (SUCCESS/FAILURE).
+        Allows supervisor to track agent lifecycle.
 
         Parameters:
-            status (AgentStatus): The new status to assign to the agent.
+            status (AgentStatus): New status to assign (IDLE, RUNNING, SUCCESS, FAILURE).
 
         Returns:
             None
@@ -129,16 +207,46 @@ class SinglePurposeAgent(LangGraphBase):
     @traceable
     async def query_response(self, state: Messages) -> Messages:
         """
-        Generate LLM response based on conversation state.
+        Generate LLM reasoning step and update conversation state with response.
 
-        Receives the current conversation message list from Ollama agent
-        and updates state with LLM response.
+        Core node of agent's reasoning loop. Invokes Ollama LLM to process current
+        messages and generate next step (tool call or final response). Handles system
+        prompt injection with Jinja2 templating and optional MCP resource embedding.
+
+        System Prompt Handling:
+            - Detects if system message already present in state
+            - Retrieves MCP resources if MCP client configured
+            - Renders system prompt template with available resources
+            - Prepends system message to beginning of message list
+
+        MCP Integration:
+            - Queries MCP servers for available resources (if client initialized)
+            - Embeds resource content into system prompt for context
+            - Gracefully continues if MCP resource retrieval fails
+            - Allows agent to access external knowledge sources
+
+        State Management:
+            - Sets agent status to RUNNING
+            - Invokes ollama_agent.invoke() to get LLM response
+            - Stores updated state with new LLM message
+            - Preserves conversation history
 
         Parameters:
-            state (Messages): Current conversation state with messages.
+            state (Messages): Current conversation state with message history.
+                Format: {'messages': [Message(role, content), ...]}
 
         Returns:
-            Messages: Updated state with agent response.
+            Messages: Updated state with new message(s) from LLM response.
+                LLM may add tool calls or final response message.
+
+        Raises:
+            ValueError: If Ollama agent invocation fails (logged and re-raised).
+
+        Side Effects:
+            - Sets self.status = AgentStatus.RUNNING
+            - Updates self.state with new agent response
+            - Modifies state['messages'] in-place (prepends system message if needed)
+            - Connects to MCP servers if configured
         """
         self.status = AgentStatus.RUNNING
         # Invoke Ollama agent
@@ -180,15 +288,44 @@ class SinglePurposeAgent(LangGraphBase):
     @traceable
     def manage_steps(self, state: Messages) -> str:
         """
-        Determine the next step in the conversation flow.
+        Conditional routing: determine whether to continue reasoning or finish task.
 
-        Checks if the last message contains a tool call to decide whether
-        to continue querying or finish the interaction.
+        Examines the last message in conversation to decide next action. Implements
+        step counting to enforce max_steps limit and prevent infinite loops. Routes
+        to either another query_response cycle or final finalization.
+
+        Step Counting Logic:
+            1. Increments step counter on each call
+            2. Checks if last message is a tool call (LLM requesting tool execution)
+            3. If tool call and steps < max_steps: route to 'agent' (query_response)
+            4. If tool call and steps >= max_steps: route to 'finish' (force termination)
+            5. If no tool call: agent is done, route to 'finish'
+
+        Message Inspection:
+            - Detects tool calls by checking last message role == 'tool'
+            - Logs final response content when no tool call present
+            - Tracks total message count for debugging
+
+        State Transition:
+            - Returns 'agent': Continue reasoning loop (query_response node)
+            - Returns 'finish': Proceed to finalization (finish_ollama_interaction node)
 
         Parameters:
-            state (Messages): Current conversation state with messages.
+            state (Messages): Current conversation state with message history.
+
         Returns:
-            str: Next node to transition to ('query_response' or 'finish_ollama_interaction').
+            str: Next node identifier ('agent' or 'finish') for conditional edge routing.
+
+        Side Effects:
+            - Increments self.steps counter
+            - Updates self.messages_count
+            - Logs step count, tool detection, and final responses
+            - Logs error if max_steps reached during routing
+
+        Example:
+            Step 1: LLM generates tool call → returns 'agent' (continue)
+            Step 2: LLM generates tool call → returns 'agent' (continue)
+            Step 3: max_steps=3, tool call → returns 'finish' (force exit)
         """
         self.steps: int = self.steps + 1
         uc = 'finish'
@@ -217,12 +354,39 @@ class SinglePurposeAgent(LangGraphBase):
     @traceable
     async def finish_ollama_interaction(self, state: Messages) -> Messages:
         """
-        Finalize the Ollama interaction and return the final response.
+        Finalize agent task execution and transition to terminal state.
+
+        Called when agent reaches completion (no more tool calls) or max_steps exceeded.
+        Updates agent status based on execution completeness, resets step counter,
+        and clears LLM memory. Marks end of single-purpose task execution.
+
+        Status Logic:
+            - SUCCESS: Agent completed task before reaching max_steps
+            - FAILURE: Agent reached max_steps limit without natural completion
+            - Both: Will be collected by supervisor for result synthesis
+
+        Memory Management:
+            - Clears ollama_agent.memory to free LLM conversation history
+            - Resets self.steps counter to 0 for next potential use
+            - Preserves final state with complete message history
+
+        State Return:
+            - Returns unmodified input state for supervisor collection
+            - Final message contains agent's last response/tool call
+            - Supervisor extracts agent_result from last message content
 
         Parameters:
-            state (Messages): Current conversation state with messages.
+            state (Messages): Final conversation state at completion.
+                Contains all messages from task start to finish.
+
         Returns:
-            Messages: Final state after finishing interaction.
+            Messages: Unmodified final state returned to supervisor/caller.
+
+        Side Effects:
+            - Sets self.status = SUCCESS or FAILURE based on max_steps check
+            - Resets self.steps = 0
+            - Calls ollama_agent.reset_memory() to clear LLM state
+            - Logs finalization status
         """
         self._log('Finalizing Ollama interaction.')
         if self.steps >= self.max_steps:
@@ -239,14 +403,42 @@ class SinglePurposeAgent(LangGraphBase):
 
     async def make_graph(self):
         """
-        Initialize and compile the LangGraph workflow.
+        Construct and compile the agent's LangGraph state machine workflow.
 
-        This method creates a LangGraph StateGraph with nodes for query processing and
-        conversation finalization. It defines the flow of the conversation based on
-        LLM outputs and compiles the graph for execution.
+        Builds a directed acyclic graph (DAG) with two nodes and conditional routing:
+        1. query_response: Main LLM reasoning node (async)
+        2. finish_ollama_interaction: Finalization node (async)
+
+        Graph Flow:
+            START → query_response ↓ (conditional)
+                ├─ 'agent' → query_response (loop for tool calls)
+                └─ 'finish' → finish_ollama_interaction → END
+
+        Conditional Routing:
+            The manage_steps() method decides routing:
+            - Returns 'agent': More tool calls needed, loop back to query_response
+            - Returns 'finish': Task complete or max_steps reached, proceed to finalization
+
+        Execution Model:
+            - Compiled graph supports async execution (ainvoke)
+            - Maintains conversation state across nodes
+            - Enforces step limits to prevent infinite loops
+            - Supports tool calls within Ollama integration
+
+        Stored Result:
+            - Compiled graph stored in self.graph
+            - Ready for invocation by supervisor/run_agent()
+            - One graph per agent instance
+
+        Parameters:
+            None: Uses instance attributes (query_response, manage_steps, etc.)
 
         Returns:
-            None: The compiled graph is stored in self.graph.
+            None: Compiled graph stored in self.graph attribute.
+
+        Side Effects:
+            - Creates self.graph (compiled StateGraph)
+            - Ready for async execution via graph.ainvoke(initial_state)
         """
         # Create the StateGraph workflow
         workflow = StateGraph(Messages)
@@ -287,12 +479,31 @@ class SinglePurposeAgent(LangGraphBase):
           })
     def find_object(object_name: str) -> str:
         """
-        Find the location of a specified object.
+        Locate a physical object by name in the agent's environment.
+
+        Simple tool for agent to query object location. In real implementations,
+        would interface with perception system, knowledge base, or spatial mapping.
+        Currently returns mock response for demonstration/testing.
+
+        Tool Invocation:
+            - LLM calls this tool when agent needs to find an object
+            - Passes object_name as parameter
+            - Receives location string as response
+            - Continues reasoning with location information
 
         Parameters:
-            object_name (str): Name of the object to find.
+            object_name (str): Name of object to locate (e.g., 'cup', 'book').
+
         Returns:
-            str: Location of the object.
+            str: Location description. Format: "Object {name} is located in {location}."
+                Example: "Object cup is located in the kitchen."
+
+        Note:
+            This is a demonstration tool. Real implementations would:
+            - Query semantic maps or spatial databases
+            - Use visual perception (SLAM, cameras)
+            - Interface with navigation/mapping services
+            - Return coordinate frames or semantic locations
         """
         # Implement the logic to find the object here
         location = f'Object {object_name} is located in the kitchen.'
@@ -313,12 +524,42 @@ class SinglePurposeAgent(LangGraphBase):
           })
     def retrieve_information(topic: str) -> str:
         """
-        Retrieve information on a given topic.
+        Query knowledge base for information about a given topic.
+
+        Tool allowing agent to retrieve factual information to support reasoning.
+        In real implementations, would connect to knowledge bases, RAG systems,
+        or external APIs. Currently returns mock response with simulated delay.
+
+        Tool Invocation:
+            - LLM calls this tool when additional information needed for task
+            - Passes topic as query parameter
+            - Receives relevant information as response
+            - Incorporates retrieved information into reasoning
+
+        Execution Model:
+            - Currently includes 10-second simulated processing delay
+            - Represents async operations: database queries, API calls, etc.
+            - Agent step counter continues during tool execution
 
         Parameters:
-            topic (str): Topic to retrieve information about.
+            topic (str): Topic/query to retrieve information about.
+                Examples: 'weather', 'robotics', 'coffee preparation'
+
         Returns:
-            str: Retrieved information.
+            str: Retrieved information about the topic.
+                Format: "Information about {topic}: {content}"
+
+        Side Effects:
+            - Simulates 10-second processing delay via time.sleep()
+            - Blocks agent during retrieval (in real implementations would be async)
+
+        Note:
+            This is a demonstration tool. Real implementations would:
+            - Connect to knowledge base (semantic search)
+            - Retrieve from RAG (Retrieval-Augmented Generation) systems
+            - Call external APIs (weather, news, knowledge graphs)
+            - Query structured databases or documentation
+            - Return chunks with confidence scores or sources
         """
         # Implement the logic to retrieve information here
         info = f'Information about {topic}: It is a fascinating subject!'

@@ -33,10 +33,15 @@ from ollama import Message
 
 class InputState(TypedDict):
     """
-    Represents the input state for the supervisor manager.
+    Input schema for the supervisor manager workflow.
+
+    Defines the initial state passed to the supervisor's LangGraph workflow.
+    The user prompt is processed to create, coordinate, and manage multiple
+    single-purpose agents.
 
     Attributes:
-        user_prompt: The user prompt for the conversation.
+        user_prompt (str): The user's query or task description that the
+            supervisor will decompose and delegate to appropriate agents.
     """
 
     user_prompt: str
@@ -45,11 +50,17 @@ class InputState(TypedDict):
 @dataclass
 class AgentTask:
     """
-    Represents a pending agent task to be executed.
+    Encapsulates a pending agent task awaiting execution.
+
+    This data structure represents a task that has been created by the supervisor's
+    LLM but not yet started. Tasks are stored in a queue and executed asynchronously
+    by the supervisor when resources become available.
 
     Attributes:
-        agent: The SinglePurposeAgent instance to execute.
-        input_state: The initial message for the agent.
+        agent (SinglePurposeAgent | None): The SinglePurposeAgent instance that
+            will execute the task. Defaults to None (assigned during creation).
+        input_state (Messages | None): The initial message state containing the
+            task description and context for the agent. Defaults to None.
     """
 
     agent: SinglePurposeAgent = None  # type: ignore[assignment]
@@ -59,13 +70,21 @@ class AgentTask:
 @dataclass
 class RunningAgentsState:
     """
-    Represents the state of running agents.
+    Tracks the execution state of a currently running agent.
+
+    Maintains metadata about an agent that is actively executing its task.
+    Enables monitoring, timeout management, and graceful cancellation of
+    long-running agents. Stored in the supervisor's running agents list.
 
     Attributes:
-        agent_id: ID of the running agent.
-        input_prompt: The input prompt used by the agent.
-        coroutine_handler: The asyncio task handling the agent execution.
-        event_loop: The asyncio event loop running the task (for cross-thread cancel).
+        agent_id (int): Unique identifier of the running agent. Defaults to -1.
+        input_prompt (str): The original input prompt/task description given
+            to the agent. Defaults to empty string.
+        coroutine_handler (asyncio.Task | None): The asyncio Task object that
+            manages the agent's concurrent execution. Defaults to None.
+        event_loop (asyncio.AbstractEventLoop | None): Reference to the event loop
+            running the agent's coroutine. Used for cross-thread cancellation
+            if needed. Defaults to None.
     """
 
     agent_id: int = -1
@@ -77,13 +96,20 @@ class RunningAgentsState:
 @dataclass
 class FinishedAgentsState:
     """
-    Represents the state of finished agents.
+    Captures the final state and results of a completed agent task.
+
+    Contains the execution summary for an agent that has finished its task,
+    whether successfully or with failure. This data is aggregated by the
+    supervisor to synthesize final responses and provide feedback to the user.
 
     Attributes:
-        agent_ids: ID of the finished agent.
-        input_prompt: The input prompt used by the agent.
-        agent_result: The result string from the agent.
-        status: The final status of the agent.
+        agent_id (int): Unique identifier of the finished agent. Defaults to -1.
+        input_prompt (str): The original task description given to the agent.
+            Defaults to empty string.
+        agent_result (str): The result or output produced by the agent's
+            execution. Defaults to empty string.
+        status (AgentStatus): The final execution status of the agent
+            (SUCCESS, FAILURE, or IDLE). Defaults to AgentStatus.IDLE.
     """
 
     agent_id: int = -1
@@ -94,30 +120,38 @@ class FinishedAgentsState:
 
 class SupervisorManager(LangGraphBase):
     """
-    Hierarchical multi-agent supervisor that coordinates multiple SinglePurposeAgent instances.
+    Hierarchical multi-agent supervisor orchestrating task decomposition and agent coordination.
 
-    The SupervisorManager uses LLM-based decision-making to manage the lifecycle of agents,
-    including creating new agents for specific tasks, monitoring their execution, and
-    aggregating results. It maintains thread-safe lists of pending, running, and finished
-    agents, and provides tools for the LLM to interact with the agent management system.
+    The SupervisorManager employs an LLM-based supervisor agent to intelligently decompose
+    complex user queries into subtasks and coordinate multiple SinglePurposeAgent instances
+    for parallel execution. The supervisor maintains complete lifecycle management of agents
+    from creation through result synthesis, while ensuring thread-safe concurrent access.
 
-    The supervisor implements a LangGraph workflow that:
-    1. Receives user prompts and initializes the conversation state.
-    2. Analyzes tasks and decides on agent creation/deletion based on LLM reasoning.
-    3. Routes decisions through tool calls (create_agent, delete_agent, skip_agent).
-    4. Finalizes the conversation with aggregated results from all agents.
+    Workflow:
+        1. set_initial_messages: Initializes LangGraph state from user input.
+        2. analyze_task: LLM supervisor analyzes the task and decides on agent actions.
+        3. route_on_tool_call: Routes supervisor's tool calls
+            (create_agent, delete_agent, skip_agent).
+        4. finalize_conversation: Aggregates results from all agents and synthesizes response.
+
+    Thread Safety:
+        All agent lists (pending, running, finished) are protected by agent_lists_lock to
+        ensure safe concurrent access from multiple agent execution threads.
 
     Attributes:
-        loop (asyncio.AbstractEventLoop): The event loop for managing async agent execution.
-        pending_agents_list (list[AgentTask]): Queue of agents waiting to be executed.
-        running_agents_list (list[RunningAgentsState]): List of currently executing agents.
-        finished_agents_list (list[FinishedAgentsState]): List of completed agents with results.
-        agent_id_counter (int): Counter for generating unique agent IDs.
-        agent_lists_lock (Lock): Thread-safe mutex for agent list access.
-        supervisor_tools (list): List of available tools for the LLM supervisor.
-        sys_prompt (str): System prompt loaded from file for supervisor behavior.
-        spa_params (dict): Parameters passed to SinglePurposeAgent instances.
-        ollama_agent (Ollama): Ollama LLM instance for agent reasoning.
+        loop (asyncio.AbstractEventLoop): Event loop for async agent execution and management.
+        pending_agents_list (list[AgentTask]): Queue of created but not-yet-started agents.
+        running_agents_list (list[RunningAgentsState]): Agents currently executing their tasks.
+        finished_agents_list (list[FinishedAgentsState]): Completed agents with results.
+        agent_id_counter (int): Auto-incrementing counter for unique agent IDs.
+        agent_lists_lock (Lock): Mutex protecting concurrent agent list access.
+        supervisor_tools (list): Tools exposed to LLM for agent lifecycle control.
+        sys_prompt (str): System prompt guiding supervisor behavior and reasoning.
+        spa_params (dict): Configuration parameters for SinglePurposeAgent instances.
+        ollama_agent (Ollama): LLM instance for supervisor reasoning and planning.
+
+    Raises:
+        ValueError: If ollama_agent or spa_params are not provided during initialization.
     """
 
     def __init__(
@@ -132,18 +166,28 @@ class SupervisorManager(LangGraphBase):
         """
         Initialize the Supervisor Manager.
 
-        Creates the LLM instance with default configuration.
+        Sets up the supervisor's LangGraph workflow, tools, agent management structures,
+        and loads the system prompt. Initializes thread-safe lists for tracking agents
+        in various lifecycle states.
 
         Parameters:
-            logger: Optional ROS2 logger to use for logging (default: None).
-            ollama_agent: Optional Ollama agent instance (default: None).
-            max_steps: Maximum number of steps for the graph execution (default: 5).
-            system_prompt: The system prompt for the supervisor.
-            spa_params: Parameters for SinglePurposeAgent instances.
-            loop: Optional asyncio event loop to use (default: None).
+            logger: Optional ROS2 logger for debug/info/warning output. If None,
+                inherits from parent class. Defaults to None.
+            ollama_agent (Ollama | None): Ollama LLM instance for supervisor
+                reasoning. Required for operation. Defaults to None.
+            max_steps (int): Maximum LangGraph execution steps before termination.
+                Defaults to 5.
+            system_prompt_path (str | None): Path to YAML/text file containing
+                system prompt that guides supervisor behavior. Defaults to None.
+            spa_params (dict | None): Configuration dictionary passed to all
+                created SinglePurposeAgent instances. Required for operation.
+                Defaults to None.
+            loop (asyncio.AbstractEventLoop | None): Event loop for async agent
+                execution. If None, uses asyncio.get_event_loop(). Defaults to None.
 
-        Returns:
-            None
+        Raises:
+            ValueError: If ollama_agent is not provided.
+            ValueError: If spa_params is not provided.
         """
         super().__init__(
             logger=logger,
@@ -173,13 +217,30 @@ class SupervisorManager(LangGraphBase):
 
     def _create_supervisor_tools(self) -> list:
         """
-        Create supervisor tools as closures with access to self.
+        Create supervisor tools as closures with access to supervisor state.
 
-        This method creates tools dynamically, allowing them to access
-        instance attributes like ollama_agent or logger.
+        Dynamically creates three LLM tools (create_agent, delete_agent, skip_agent)
+        that the supervisor agent can invoke for lifecycle management. Uses closure
+        pattern to capture `self` reference, allowing tools to access and modify
+        supervisor state like agent lists and counters.
+
+        The tools are returned in Ollama's expected format with:
+        - Tool name and description
+        - JSON schema for input parameters
+        - Callable function object
+
+        Tool Lifecycle:
+            1. create_agent: Instantiates new SinglePurposeAgent, adds to pending queue
+            2. delete_agent: Cancels running agent gracefully via call_soon_threadsafe
+            3. skip_agent: No-op action for supervisor iterations without agent changes
 
         Returns:
-            list: List of tool dictionaries in the format expected by Ollama.
+            list: List of tool dictionaries with keys: 'name', 'description',
+                'inputSchema', 'tool_object'. Format required by Ollama LLM.
+
+        Note:
+            Tools use agent_lists_lock for thread-safe access to agent lists
+            to prevent race conditions between supervisor and agent threads.
         """
         # Capture self in closure
         supervisor = self
@@ -190,13 +251,31 @@ class SupervisorManager(LangGraphBase):
         )
         def create_agent(query: str) -> str:
             """
-            Create a new agent to handle the specified task.
+            Create and queue a new SinglePurposeAgent for task execution.
+
+            Instantiates a new agent with configuration from spa_params, assigns
+            a unique ID, and adds it to the pending_agents_list for asynchronous
+            execution. Uses producer-consumer pattern: supervisor produces agents,
+            timer callback consumes and executes them in background threads.
+
+            Agent Initialization:
+                - Creates independent Ollama instance for the agent
+                - Sets max_steps, system_prompt, and MCP config from spa_params
+                - Initializes status to RUNNING
+                - Generates unique auto-incremented agent ID
+
+            Threading Model:
+                - Runs synchronously in supervisor's event loop
+                - Agent execution deferred to timer callback's thread
+                - Uses agent_lists_lock for thread-safe queue insertion
 
             Parameters:
-                query: The task description for the new agent.
+                query (str): Task description/prompt for the new agent.
+                    Passed as initial message content.
 
             Returns:
-                str: Confirmation message with the assigned agent ID.
+                str: Confirmation message with assigned agent ID and task summary.
+                    Format: "Agent {id} created successfully for task: {query}"
             """
             agent_id = supervisor.agent_id_counter
             supervisor.agent_id_counter += 1
@@ -249,13 +328,34 @@ class SupervisorManager(LangGraphBase):
         )
         def delete_agent(agent_id: int) -> str:
             """
-            Delete an existing agent by its ID.
+            Terminate and remove a running agent by its ID.
+
+            Searches running_agents_list for the specified agent, cancels its
+            execution gracefully using call_soon_threadsafe (for cross-thread safety),
+            and removes it from the list. If agent not found, returns error message.
+
+            Cancellation Strategy:
+                - Uses asyncio's call_soon_threadsafe to safely cancel from supervisor thread
+                - Handles both event_loop-aware and direct cancellation
+                - Agent's asyncio.CancelledError handler stores final result before cleanup
+
+            Thread Safety:
+                - Acquires agent_lists_lock before list access
+                - Cancellation is thread-safe across event loop boundaries
+                - Running agent already removed from list before response
 
             Parameters:
-                agent_id: The ID of the agent to delete.
+                agent_id (int): Unique identifier of agent to terminate.
 
             Returns:
-                str: Confirmation message.
+                str: Status message. Either:
+                    - Success: "Agent {id} deleted successfully (was working on: {task})"
+                    - Failure: "Error: Agent {id} not found in running agents"
+
+            Side Effects:
+                - Modifies running_agents_list (agent removed)
+                - Cancels agent's coroutine in its event loop
+                - Logs deletion action
             """
             # Initialize message
             message = f'Error: Agent {agent_id} not found in running agents'
@@ -286,10 +386,20 @@ class SupervisorManager(LangGraphBase):
         )
         def skip_agent() -> str:
             """
-            Skip agent management for this iteration.
+            No-op tool: skip agent lifecycle management for current iteration.
+
+            Allows supervisor to acknowledge a workflow iteration without creating
+            or modifying agents. Useful when supervisor decides task can be handled
+            by existing agents or no new agents are needed at this time.
+
+            Use Cases:
+                - Monitoring phase: existing agents sufficient for task
+                - Error recovery: wait before creating new agents
+                - Resource constraints: defer agent creation to next iteration
+                - Supervisor reasoning: task analysis requires no action
 
             Returns:
-                str: Confirmation message.
+                str: Confirmation message indicating no action was taken.
             """
             supervisor._log('Skipping agent action')
             return 'No agent action needed for this request'
@@ -344,14 +454,56 @@ class SupervisorManager(LangGraphBase):
         initial_state: Messages
     ) -> Messages:
         """
-        Run an agent's graph asynchronously in the background.
+        Execute a SinglePurposeAgent's LangGraph workflow asynchronously in background.
+
+        Runs a complete agent execution pipeline: setup → tool retrieval → graph build →
+        task execution → result collection. Handles all error cases gracefully, storing
+        final results (success/failure) in finished_agents_list. Called by timer callback
+        in dedicated thread context.
+
+        Execution Pipeline:
+            1. Setup Phase: Initialize MCP client if configured, verify connectivity
+            2. Tool Setup: Retrieve tools available to agent from Ollama
+            3. Graph Building: Construct agent's LangGraph workflow (once per agent)
+            4. Execution: Run graph.ainvoke with initial state until completion
+            5. Result Storage: Move from running→finished list with status/output
+            6. Cleanup: Remove from running_agents_list, protect with agent_lists_lock
+
+        State Transitions:
+            - Created (pending) → Running (by timer) → Success/Failure (finished)
+            - Cancellation: Running → Failure (CancelledError caught)
+            - Exception: Running → Failure (any other exception)
+
+        Setup Robustness:
+            - MCP client failures logged but don't prevent execution
+            - Tool retrieval optional; agent continues without unavailable tools
+            - Allows graceful degradation if MCP servers unavailable
+
+        Thread Safety:
+            - Updates running_agents_list with agent_lists_lock protection
+            - Updates finished_agents_list with agent_lists_lock protection
+            - Safe to call from timer callback's thread context
+            - Handles cross-thread cancellation via event_loop.call_soon_threadsafe()
 
         Parameters:
-            agent: The agent instance to run.
-            initial_state: Initial message state for the agent.
+            agent (SinglePurposeAgent): Agent instance with configured LLM and tools.
+            initial_state (Messages): Initial message state with user prompt/task.
+                Format: {'messages': [Message(role='user', content='...')]}
 
         Returns:
-            Messages: The final state after agent execution.
+            Messages: Final state from agent's graph execution (typically last message).
+
+        Raises:
+            asyncio.CancelledError: If supervisor calls delete_agent during execution.
+                Caught internally; result stored before re-raising for cleanup.
+            Exception: Other exceptions logged but caught; agent marked FAILURE.
+
+        Side Effects:
+            - Modifies agent status: RUNNING → SUCCESS/FAILURE
+            - Moves agent from running_agents_list → finished_agents_list
+            - Creates and executes agent's LangGraph (one-time per agent)
+            - Logs detailed execution pipeline status
+            - May initialize MCP client and retrieve tools
         """
         agent_id = agent.get_id()
         execution_result = FinishedAgentsState(
