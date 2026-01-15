@@ -278,59 +278,6 @@ class HierarchicalMultiagent(LangGraphRosBase):
 
         self.get_logger().info('SupervisorManager graph created successfully...')
 
-    def _process_graph(self, input_state: InputState, thread_id: str) -> dict:
-        """
-        Synchronously invoke supervisor's graph with blocking behavior.
-
-        Blocks until supervisor completes task analysis, agent creation/deletion,
-        agent result collection, and final response synthesis. Returns complete
-        execution results to caller. Used when ROS2 service caller needs response.
-
-        Graph Execution:
-            1. Supervisor initializes state from user_prompt
-            2. Supervisor analyzes task via LLM (query_response node)
-            3. Supervisor creates/deletes agents via tool calls (routing node)
-            4. Waits for agent results collection (via pending/running lists)
-            5. Synthesizes final response from agent outputs
-            6. Returns final message state
-
-        Checkpointing:
-            - Uses configurable thread_id for checkpoint persistence
-            - thread_id='supervisor' maintains supervisor context across calls
-            - Allows checkpoint storage/retrieval if configured
-
-        Blocking Model:
-            - run_until_complete(graph.ainvoke(...)) blocks calling thread
-            - Supervisor event loop executes until graph.END reached
-            - Agent execution happens asynchronously in separate threads
-            - Returns only when supervisor finishes response synthesis
-
-        Parameters:
-            input_state (InputState): Initial state with 'user_prompt' key.
-                Format: {'user_prompt': 'user query string'}
-            thread_id (str): Checkpoint thread identifier for state persistence.
-                Typically 'supervisor' to maintain context.
-
-        Returns:
-            dict: Final graph output state with 'messages' key containing
-                complete conversation history and final supervisor response.
-                Example: {'messages': [..., Message(role='assistant', content='final response')]}
-
-        Side Effects:
-            - Invokes supervisor_manager.graph.ainvoke()
-            - May trigger agent creation via supervisor tools
-            - Updates supervisor_manager agent lists during execution
-            - Maintains checkpoint state under thread_id
-
-        Note:
-            Blocks the calling thread (main ROS2 executor thread).
-            Use _process_graph_async() for non-blocking behavior.
-        """
-        config = {'configurable': {'thread_id': thread_id}}
-        return self.loop.run_until_complete(
-            self.supervisor_manager.graph.ainvoke(input_state, config=config)
-        )
-
     def _process_graph_async(self, input_state: InputState, thread_id: str) -> None:
         """
         Asynchronously invoke supervisor's graph without blocking caller.
@@ -383,102 +330,75 @@ class HierarchicalMultiagent(LangGraphRosBase):
 
     def agent_callback(self, request, response):
         """
-        ROS2 service callback: process user queries and return supervisor responses.
+        ROS2 service callback: process user queries asynchronously.
 
         Implements CallAgent service endpoint. Routes incoming user queries to
-        supervisor's LangGraph workflow for decomposition into agent subtasks.
-        Supports both blocking (wait for response) and non-blocking (fire-and-forget)
-        modes based on request.response_needed flag.
+        supervisor's LangGraph workflow for asynchronous processing. Submits query
+        to background execution without waiting for completion.
 
         Request Fields:
             - query (str): User's natural language query/task
-            - response_needed (bool): If True, block until completion and return response.
-                If False, submit asynchronously and return immediately.
+            - response_needed (bool): Deprecated. Currently ignored; all queries
+                processed asynchronously for non-blocking ROS2 service behavior.
 
-        Execution Flow (response_needed=True):
-            1. Extract query from request
-            2. Create InputState with user_prompt
-            3. Call _process_graph() (blocking)
-            4. Supervisor creates agents, collects results
-            5. Extract final response from result['messages'][-1]['content']
-            6. Log processing time and response
-            7. Return response to caller
+        Execution Flow:
+            1. Extract query from request.query
+            2. Log incoming query at DEBUG level
+            3. Create InputState dictionary with user_prompt key
+            4. Set fixed thread_id='supervisor' for checkpoint context
+            5. Call _process_graph_async(input_state, thread_id)
+            6. Return immediately with success message
+            7. Supervisor processes graph in background (may create agents, execute tools)
+            8. Results logged/printed but not returned to caller
 
-        Execution Flow (response_needed=False):
-            1. Extract query from request
-            2. Create InputState with user_prompt
-            3. Call _process_graph_async() (non-blocking)
-            4. Return immediately with "Query submitted for processing"
-            5. Supervisor executes in background
-            6. Results logged/printed but not returned to caller
-
-        Thread ID:
-            - Uses fixed thread_id='supervisor' for all calls
-            - Maintains supervisor checkpoint context across service calls
-            - Allows checkpoint persistence and state recovery
+        Thread ID Management:
+            - Uses fixed thread_id='supervisor' for all service calls
+            - Maintains supervisor checkpoint context across multiple calls
+            - Enables checkpoint persistence and state recovery from ROS2 node lifetime
 
         Response Population:
-            - response.agent_response set to final message content
-            - Extracted from result['messages'][-1].get('content', '')
-            - Empty string if no content (error handling)
+            - response.agent_response set to fixed string: 'Query submitted for processing'
+            - Indicates query was accepted and queued, not that processing completed
+            - Client should not rely on response_field for task results
 
         Logging:
             - Logs incoming query at DEBUG level
-            - Logs processing time (only blocking mode)
-            - Logs final response content
-            - Logs async submission message
+            - Does not log processing time (asynchronous execution)
+            - Results printed to logger by supervisor in background
 
         Parameters:
-            request (CallAgent.Request): Service request with query and response_needed flag.
+            request (CallAgent.Request): Service request with query string.
             response (CallAgent.Response): Service response object to populate.
 
         Returns:
-            CallAgent.Response: Populated response with agent_response field.
+            CallAgent.Response: Response with fixed agent_response string.
 
         Side Effects:
-            - Invokes supervisor graph (may create agents, execute tools)
-            - Modifies agent_lists_lock protected lists
-            - Logs query processing and results
-            - Measures execution time (blocking mode)
+            - Queues supervisor graph processing in event loop
+            - Does not block ROS2 executor
+            - Eventually modifies agent_lists (via background timer)
+            - Logs query and status
 
-        Error Handling:
-            - Exceptions from graph processing propagate to ROS2 executor
-            - Malformed requests cause service exception (ROS2 handles)
-            - No try-except here; failures reported via ROS2 mechanisms
+        Note:
+            Non-blocking service design allows ROS2 MultiThreadedExecutor to handle
+            multiple concurrent requests without blocking on long-running graph
+            execution. Graph processing happens in dedicated event loop thread managed
+            by _agent_execution_timer_callback.
         """
         user_query = request.query
-        response_needed = request.response_needed
 
         self.get_logger().debug(f'Received user query:\n{user_query}')
 
         # Use a fixed thread ID for supervisor to maintain context
         thread_id = 'supervisor'
 
-        init_time = time.time()
-
         # Create input state with user prompt
         input_state: InputState = {'user_prompt': user_query}
 
-        # Process graph based on response_needed flag
-        if response_needed:
-            # Blocking behavior: wait for the result and return it
-            result = self._process_graph(input_state, thread_id)
-
-            # Log processing time and generated response
-            self.get_logger().info(
-                f'Agent processing time: {time.time() - init_time:.3f} seconds'
-            )
-            self.get_logger().info(
-                f'Generated response: {result["messages"][-1].get("content", "")}'
-            )
-
-            # Return the response to the user request
-            response.agent_response = result['messages'][-1].get('content', '')
-        else:
-            # Non-blocking behavior: schedule asynchronously
-            self.get_logger().info('Processing query asynchronously (response not needed)')
-            self._process_graph_async(input_state, thread_id)
-            response.agent_response = 'Query submitted for processing'
+        # Process graph
+        self.get_logger().info('Processing query asynchronously...')
+        self._process_graph_async(input_state, thread_id)
+        response.agent_response = 'Query submitted for processing'
 
         return response
 
