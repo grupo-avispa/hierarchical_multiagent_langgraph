@@ -5,6 +5,7 @@ It is meant to be used with LangGraph Studio.
 Run it with the command: langgraph dev --allow-blocking
 """
 from pathlib import Path
+
 from hierarchical_multiagent_langgraph.supervisor import SupervisorManager
 from langgraph_base_ros.ollama_utils import Ollama
 

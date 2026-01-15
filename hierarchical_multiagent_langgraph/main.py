@@ -1,38 +1,72 @@
+"""Hierarchical Multiagent LangGraph ROS2 Node.
 
+This module implements a hierarchical multi-agent system using LangGraph
+and ROS2. It manages a supervisor agent that coordinates multiple specialized
+single-purpose agents (SPAs) for complex task execution. The supervisor
+decomposes high-level user queries into sub-tasks and delegates them to
+appropriate agents, then synthesizes their responses.
+
+Main Components:
+    - HierarchicalMultiagent: Main ROS2 node managing the supervisor and agents.
+    - SupervisorManager: Orchestrates the agent hierarchy and LangGraph workflow.
+    - Agent execution threads: Each agent runs in its own event loop for isolation.
+"""
 
 import asyncio
 import threading
 import time
 
-from hierarchical_multiagent_langgraph.supervisor import (InputState, SupervisorManager, 
-    AgentTask, RunningAgentsState, FinishedAgentsState, Messages, SinglePurposeAgent)
+from hierarchical_multiagent_langgraph.supervisor import (
+    InputState,
+    RunningAgentsState,
+    SupervisorManager
+)
 from langgraph_base_ros.langgraph_ros_base import LangGraphRosBase
 from llm_interactions_msgs.srv import CallAgent
-from langgraph_base_ros.ollama_utils import Ollama
+
 
 import rclpy
-from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 
 
 class HierarchicalMultiagent(LangGraphRosBase):
+    """ROS2 node for hierarchical multi-agent LangGraph coordination.
+
+    This node implements a supervisor-based multi-agent system where a supervisor
+    agent decomposes complex user queries into subtasks and coordinates multiple
+    single-purpose agents (SPAs) to execute them. Each agent runs in its own
+    thread with an independent event loop to ensure concurrency and isolation.
+
+    The node exposes a ROS2 service for receiving user queries and manages:
+    - Agent instantiation and lifecycle
+    - Task delegation to appropriate agents
+    - Response synthesis from multiple agent outputs
+    - Asynchronous and blocking execution modes
+
+    Attributes:
+        supervisor_manager (SupervisorManager): Manages the supervisor agent
+            and the LangGraph workflow for task orchestration.
+        agent_lists_lock (threading.Lock): Synchronizes access to agent lists
+            between the main thread and agent execution threads.
+        pending_agents_list (list): Queue of agents waiting to be executed.
+        running_agents_list (list): List of currently executing agents.
+        agent_srv (rclpy.node.Service): ROS2 service for receiving user queries.
+        agent_timer (rclpy.node.TimerHandle): Timer for consuming pending agents.
+        spa_params (dict): Configuration parameters for single-purpose agents.
+    """
 
     def __init__(self):
-        """Initialize the LangGraph ROS node."""
+        """Initialize the Hierarchical Multiagent ROS2 node.
+
+        Sets up the supervisor manager, builds the LangGraph workflow,
+        creates ROS2 service for handling queries, and initializes the
+        agent execution timer.
+        """
         # Call the base class initializer
         super().__init__()
 
         self.get_spa_params()
-
-        # try:
-        #     self.loop.run_until_complete(self.initialize_mcp_client(
-        #         self.spa_mcp_servers,
-        #         self.spa_params
-        #     ))
-        # except Exception as e:
-        #     self.get_logger().error(f'Failed to initialize mcp client for SPA: {e}')
-        #     raise
-
 
         # Initialize the Supervisor Manager
         self.supervisor_manager = SupervisorManager(
@@ -40,10 +74,10 @@ class HierarchicalMultiagent(LangGraphRosBase):
             ollama_agent=self.ollama_agent,
             max_steps=self.max_steps,
             system_prompt_path=self.system_prompt_file,
-            spa_params=self.spa_params, 
+            spa_params=self.spa_params,
             loop=self.loop
         )
-        
+
         # Retrieve tools for Ollama agent
         self.loop.run_until_complete(
             self.supervisor_manager.ollama_agent.retrieve_tools(
@@ -94,16 +128,18 @@ class HierarchicalMultiagent(LangGraphRosBase):
         if agent_idle is not None:
             agent_id = agent_idle.agent.get_id()
             self.get_logger().info(
-                f'Timer: Starting execution of agent {agent_id} in thread' + 
-                f' [{threading.current_thread().name}]')
+                f'Timer: Starting execution of agent {agent_id} in thread '
+                f'[{threading.current_thread().name}]')
             # Create a new event loop for this thread
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
 
             # Schedule the agent execution coroutine in the new event loop
             agent_task = loop.create_task(
-                self.supervisor_manager.run_agent(agent_idle.agent, 
-                                                  agent_idle.input_state))
+                self.supervisor_manager.run_agent(
+                    agent_idle.agent,
+                    agent_idle.input_state
+                ))
 
             # Create running agent object with all required fields
             running_agent = RunningAgentsState(
@@ -112,7 +148,7 @@ class HierarchicalMultiagent(LangGraphRosBase):
                 coroutine_handler=agent_task,
                 event_loop=loop
             )
-            
+
             # Add to running agents list
             self.supervisor_manager.agent_lists_lock.acquire()
             self.supervisor_manager.running_agents_list.append(running_agent)
@@ -120,8 +156,9 @@ class HierarchicalMultiagent(LangGraphRosBase):
 
             # Need to await the agent task to completion
             try:
-                self.get_logger().info(f"working on agent [{agent_id}]" + 
-                f" in thread [{threading.current_thread().name}]...")
+                self.get_logger().info(
+                    f'Working on agent [{agent_id}]'
+                    f' in thread [{threading.current_thread().name}]...')
                 loop.run_until_complete(agent_task)
             except asyncio.CancelledError:
                 self.get_logger().info(f'Agent {agent_id} execution was cancelled.')
@@ -225,7 +262,7 @@ class HierarchicalMultiagent(LangGraphRosBase):
             response.agent_response = 'Query submitted for processing'
 
         return response
-    
+
     def get_spa_params(self) -> None:
         """
         Retrieve and configure ROS2 parameters relative to single purpose agents creation.
@@ -242,49 +279,52 @@ class HierarchicalMultiagent(LangGraphRosBase):
         # Initialize spa_params dictionary by copying agent_params
         self.spa_params = self.agent_params.copy()
         # Remove mcp_client from spa_params if it exists
-        if "mcp_client" in self.spa_params:
-            del self.spa_params["mcp_client"]
+        if 'mcp_client' in self.spa_params:
+            del self.spa_params['mcp_client']
 
         # Declare and retrieve MCP servers parameter
         self.declare_parameter('spa_mcp_servers', 'mcp.json')
-        self.spa_params["mcp_servers_config"] = self.get_parameter(
+        self.spa_params['mcp_servers_config'] = self.get_parameter(
             'spa_mcp_servers').get_parameter_value().string_value
         self.get_logger().info(
             f'The parameter spa_mcp_servers is set to: [{self.spa_params["mcp_servers_config"]}]')
-        
+
         # Declare and retrieve system prompt template path parameter
         self.declare_parameter('spa_system_prompt_file', 'system_prompt.jinja')
-        self.spa_params["system_prompt_file"] = self.get_parameter(
+        self.spa_params['system_prompt_file'] = self.get_parameter(
             'spa_system_prompt_file').get_parameter_value().string_value
         self.get_logger().info(
-            f'The parameter spa_system_prompt_file is set to: [{self.spa_params["system_prompt_file"]}]')
+            f'The parameter spa_system_prompt_file is set to: '
+            f'[{self.spa_params["system_prompt_file"]}]')
 
         # Declare and retrieve model chat template file path parameter
         self.declare_parameter('spa_template_type', 'qwen3')
-        self.spa_params["template_type"] = self.get_parameter(
+        self.spa_params['template_type'] = self.get_parameter(
             'spa_template_type').get_parameter_value().string_value
         self.get_logger().info(
             f'The parameter spa_template_type is set to: [{self.spa_params["template_type"]}]')
 
         # Declare and retrieve LLM model name parameter
         self.declare_parameter('spa_llm_model', 'qwen3:0.6b')
-        self.spa_params["model"] = self.get_parameter(
+        self.spa_params['model'] = self.get_parameter(
             'spa_llm_model').get_parameter_value().string_value
         self.get_logger().info(
             f'The parameter spa_llm_model is set to: [{self.spa_params["model"]}]')
         # Declare tool call regex pattern to extract tool calls from LLM response
         self.declare_parameter('spa_tool_call_pattern', '<tool_call>(.*?)</tool_call>')
-        self.spa_params["tool_call_pattern"] = self.get_parameter(
+        self.spa_params['tool_call_pattern'] = self.get_parameter(
             'spa_tool_call_pattern').get_parameter_value().string_value
         self.get_logger().info(
-            f'The parameter spa_tool_call_pattern is set to: [{self.spa_params["tool_call_pattern"]}]')
+            f'The parameter spa_tool_call_pattern is set to: '
+            f'[{self.spa_params["tool_call_pattern"]}]')
 
         # Declare and retrieve LangGraph workflow parameters
         self.declare_parameter('spa_max_steps', 5)
-        self.spa_params["max_steps"] = self.get_parameter(
+        self.spa_params['max_steps'] = self.get_parameter(
             'spa_max_steps').get_parameter_value().integer_value
         self.get_logger().info(
             f'The parameter spa_max_steps is set to: [{self.spa_params["max_steps"]}]')
+
 
 def main(args=None) -> None:
     """

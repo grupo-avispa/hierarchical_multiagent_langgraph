@@ -1,16 +1,17 @@
+
 from enum import Enum
-from pathlib import Path
-from langgraph.graph import START, StateGraph, END
-from langchain.tools import tool
-from langsmith import traceable
-from ollama import Message
-from jinja2 import Template
-from fastmcp import Client
-import asyncio
 import json
+
+from fastmcp import Client
+from jinja2 import Template
+from langchain.tools import tool
+from langgraph.graph import START, StateGraph
+from langgraph_base_ros.chat_template_render import Messages
 from langgraph_base_ros.langgraph_base import LangGraphBase
 from langgraph_base_ros.ollama_utils import Ollama
-from langgraph_base_ros.chat_template_render import Messages
+from langsmith import traceable
+from ollama import Message
+
 
 class AgentStatus(str, Enum):
     """Enumeration of possible agent statuses."""
@@ -19,6 +20,7 @@ class AgentStatus(str, Enum):
     RUNNING = 'running'
     SUCCESS = 'success'
     FAILURE = 'failure'
+
 
 class SinglePurposeAgent(LangGraphBase):
     """
@@ -45,37 +47,40 @@ class SinglePurposeAgent(LangGraphBase):
             logger: Optional ROS2 logger to use for logging (default: None).
             ollama_agent (Ollama): Instance of the Ollama agent for LLM interactions.
             max_steps (int): Maximum allowed steps before finishing interaction.
+            system_prompt_path (str): Path to the system prompt file.
+            mcp_servers_config (str): Path to MCP servers configuration file.
 
         Returns:
             None
         """
         if ollama_agent is None:
             raise ValueError('Ollama agent instance must be provided to LangGraphManager.')
-        
+
         super().__init__(
             logger=logger,
             ollama_agent=ollama_agent,
             max_steps=max_steps,
         )
 
-        self.id: int = -1  # Unique identifier for the agent
-        self.status: AgentStatus = AgentStatus.IDLE  # Current status of the agent
-        self.lang_tools = []
-        # self._generate_tools_list() # Generate tools list for the agent (uncomment for local tools use)
-        self._get_system_prompt(system_prompt_path) # Load system prompt to attribute sys_prompt
+        # Unique identifier for the agent
+        self.id: int = -1
+        # Current status of the agent
+        self.status: AgentStatus = AgentStatus.IDLE
+        # List of tools available to the agent
+        self.lang_tools: list = []
+        # Load system prompt to attribute sys_prompt
+        self._get_system_prompt(system_prompt_path)
         # Initialize MCP client if configuration is provided
         if mcp_servers_config is not None:
             try:
-                # open json config file
+                # Open json config file
                 with open(mcp_servers_config, 'r') as f:
                     config_data = json.load(f)
                 self.ollama_agent.mcp_client = Client(config_data)
-                # loop = asyncio.get_event_loop()
-                # loop.run_until_complete(self.ollama_agent.mcp_client.__aenter__())
                 self._log('AGENT: MCP client initialized successfully')
             except Exception as e:
                 self._log(f'Error initializing MCP client: {e}')
-                self.ollama_agent.mcp_client = None 
+                self.ollama_agent.mcp_client = None
 
     def set_id(self, agent_id: int) -> None:
         """
@@ -98,12 +103,12 @@ class SinglePurposeAgent(LangGraphBase):
         """
         return self.id
 
-    def get_status(self) -> str:
+    def get_status(self) -> AgentStatus:
         """
         Get the current status of the agent.
 
         Returns:
-            str: The current status of the agent.
+            AgentStatus: The current status of the agent.
         """
         return self.status
 
@@ -125,7 +130,8 @@ class SinglePurposeAgent(LangGraphBase):
     async def query_response(self, state: Messages) -> Messages:
         """
         Generate LLM response based on conversation state.
-        Receives the current conversation message list from ollama agent
+
+        Receives the current conversation message list from Ollama agent
         and updates state with LLM response.
 
         Parameters:
@@ -134,7 +140,7 @@ class SinglePurposeAgent(LangGraphBase):
         Returns:
             Messages: Updated state with agent response.
         """
-        self.status = AgentStatus.RUNNING 
+        self.status = AgentStatus.RUNNING
         # Invoke Ollama agent
         try:
             # Check if any of the message roles is 'system'
@@ -145,7 +151,6 @@ class SinglePurposeAgent(LangGraphBase):
                 # Get resources
                 resources_content = []
                 if self.ollama_agent.mcp_client is not None:
-                    # await self.ollama_agent.mcp_client.__aenter__()
                     try:
                         async with self.ollama_agent.mcp_client as client:
                             resources = await client.list_resources()
@@ -160,9 +165,6 @@ class SinglePurposeAgent(LangGraphBase):
                 rendered_system_prompt = template.render(
                     resources=resources_content
                 )
-                # self._log(f'AGENT{self.id}:\n--- Rendered system prompt  ---')
-                # self._log(f'\n\n{rendered_system_prompt}\n')
-                # self._log(f'\n------------------------------')
                 # Prepend system prompt if not already present
                 state['messages'].insert(0, Message(
                     role='system',
@@ -170,11 +172,11 @@ class SinglePurposeAgent(LangGraphBase):
                 ))
             self.state = await self.ollama_agent.invoke(state=state)
         except ValueError as e:
-            self._log(f"AGENT: Error during Ollama agent invocation: {e}")
+            self._log(f'AGENT: Error during Ollama agent invocation: {e}')
             raise e
-        
+
         return self.state
-    
+
     @traceable
     def manage_steps(self, state: Messages) -> str:
         """
@@ -188,28 +190,30 @@ class SinglePurposeAgent(LangGraphBase):
         Returns:
             str: Next node to transition to ('query_response' or 'finish_ollama_interaction').
         """
-        self.steps += 1
+        self.steps: int = self.steps + 1
         uc = 'finish'
-        self._log(f"AGENT: Managing steps, current step: {self.steps}")
+        self._log(f'AGENT: Managing steps, current step: {self.steps}')
         try:
             # Check if the last message contains a tool call
             if state['messages'] and state['messages'][-1]['role'] == 'tool':
                 if self.steps < self.max_steps:
                     uc = 'agent'
                 else:
-                    self._log("AGENT: Maximum steps reached, finishing interaction.")
+                    self._log('AGENT: Maximum steps reached, finishing interaction.')
             else:
-                self._log("AGENT: No tool call detected, finishing interaction.")
-                self._log("AGENT: Final response from assistant:\n" +
-                        f"{state['messages'][-1]['content']}")
+                self._log('AGENT: No tool call detected, finishing interaction.')
+                self._log(
+                    'AGENT: Final response from assistant:\n'
+                    f"{state['messages'][-1]['content']}"
+                )
             # Update messages count
             self.messages_count = len(state['messages'])
-            self._log(f"AGENT: Total messages in conversation: {self.messages_count}")
+            self._log(f'AGENT: Total messages in conversation: {self.messages_count}')
         except Exception as e:
-            self._log(f"AGENT: Error in manage_steps: {e}")
+            self._log(f'AGENT: Error in manage_steps: {e}')
             uc = 'finish'
         return uc
-    
+
     @traceable
     async def finish_ollama_interaction(self, state: Messages) -> Messages:
         """
@@ -220,18 +224,17 @@ class SinglePurposeAgent(LangGraphBase):
         Returns:
             Messages: Final state after finishing interaction.
         """
-
-        self._log("Finalizing Ollama interaction.")
+        self._log('Finalizing Ollama interaction.')
         if self.steps >= self.max_steps:
-            self._log("AGENT: Maximum steps reached during finalization.")
+            self._log('AGENT: Maximum steps reached during finalization.')
             self.status = AgentStatus.FAILURE
         else:
-            self._log("AGENT: Agent reached final state before maximum steps.")
+            self._log('AGENT: Agent reached final state before maximum steps.')
             self.status = AgentStatus.SUCCESS
         self.steps = 0
         self.ollama_agent.reset_memory()
         return state
-    
+
     # ========== GRAPH GENERATION ==========
 
     async def make_graph(self):
@@ -245,7 +248,6 @@ class SinglePurposeAgent(LangGraphBase):
         Returns:
             None: The compiled graph is stored in self.graph.
         """
-
         # Create the StateGraph workflow
         workflow = StateGraph(Messages)
 
@@ -261,26 +263,28 @@ class SinglePurposeAgent(LangGraphBase):
         # After a agent step, check end conditions and proceed accordingly
         workflow.add_conditional_edges(
             'query_response',
-            self.manage_steps, 
+            self.manage_steps,
             {'agent': 'query_response', 'finish': 'finish_ollama_interaction'},
         )
 
         # Compile the graph workflow
         self.graph = workflow.compile()
-    
+
     # ========== LANGGRAPH TOOLS ==========
-    
+
     @staticmethod
-    @tool("find_object",
-          description="Find the location of a specified object.",
-          args_schema={"type": "object",
-                       "properties": {
-                           "object_name": {
-                               "type": "string",
-                               "description": "Name of the object to find."
-                           }
-                       },
-                       "required": ["object_name"]})
+    @tool('find_object',
+          description='Find the location of a specified object.',
+          args_schema={
+              'type': 'object',
+              'properties': {
+                  'object_name': {
+                      'type': 'string',
+                      'description': 'Name of the object to find.'
+                  }
+              },
+              'required': ['object_name']
+          })
     def find_object(object_name: str) -> str:
         """
         Find the location of a specified object.
@@ -291,20 +295,22 @@ class SinglePurposeAgent(LangGraphBase):
             str: Location of the object.
         """
         # Implement the logic to find the object here
-        location = f"Object {object_name} is located in the kitchen."
+        location = f'Object {object_name} is located in the kitchen.'
         return location
-    
+
     @staticmethod
-    @tool("retrieve_information",
-          description="Retrieve information on a given topic.",
-          args_schema={"type": "object",
-                       "properties": {
-                           "topic": {
-                               "type": "string",
-                               "description": "Topic to retrieve information about."
-                           }
-                       },
-                       "required": ["topic"]})
+    @tool('retrieve_information',
+          description='Retrieve information on a given topic.',
+          args_schema={
+              'type': 'object',
+              'properties': {
+                  'topic': {
+                      'type': 'string',
+                      'description': 'Topic to retrieve information about.'
+                  }
+              },
+              'required': ['topic']
+          })
     def retrieve_information(topic: str) -> str:
         """
         Retrieve information on a given topic.
@@ -315,7 +321,7 @@ class SinglePurposeAgent(LangGraphBase):
             str: Retrieved information.
         """
         # Implement the logic to retrieve information here
-        info = f"Information about {topic}: It is a fascinating subject!"
+        info = f'Information about {topic}: It is a fascinating subject!'
         import time
-        time.sleep(10) # Sleep 100 seconds to simulate long processing
+        time.sleep(10)  # Sleep 10 seconds to simulate long processing
         return info

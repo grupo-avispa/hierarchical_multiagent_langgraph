@@ -1,22 +1,34 @@
-import asyncio
-from threading import Lock
-from dataclasses import dataclass
-from typing import TypedDict
-from pathlib import Path
+"""
+Supervisor manager module for hierarchical multi-agent coordination using LangGraph.
 
+This module provides the SupervisorManager class, which orchestrates multiple
+SinglePurposeAgent instances in a hierarchical structure. The supervisor uses
+LLM-based decision-making to create, manage, and coordinate the lifecycle of
+agents based on user tasks and LLM reasoning.
+
+Key components:
+    - SupervisorManager: Main class that manages agent lifecycle and coordination.
+    - AgentTask: Data structure for pending agent tasks.
+    - RunningAgentsState: Tracks currently executing agents.
+    - FinishedAgentsState: Tracks completed agent executions and results.
+    - InputState: Input schema for the supervisor workflow.
+"""
+
+import asyncio
+from dataclasses import dataclass
+from threading import Lock
+from typing import TypedDict
+
+from hierarchical_multiagent_langgraph.agent import AgentStatus, SinglePurposeAgent
 from jinja2 import Template
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
-from langsmith import traceable
-from ollama import Message
-
-from hierarchical_multiagent_langgraph.agent import SinglePurposeAgent, AgentStatus
-
+from langgraph_base_ros.chat_template_render import Messages
 from langgraph_base_ros.langgraph_base import LangGraphBase
 from langgraph_base_ros.ollama_utils import Ollama
-from langgraph_base_ros.chat_template_render import Messages
-
+from langsmith import traceable
+from ollama import Message
 
 
 class InputState(TypedDict):
@@ -40,8 +52,9 @@ class AgentTask:
         input_state: The initial message for the agent.
     """
 
-    agent: SinglePurposeAgent = None
+    agent: SinglePurposeAgent = None  # type: ignore[assignment]
     input_state: Messages = None
+
 
 @dataclass
 class RunningAgentsState:
@@ -49,16 +62,17 @@ class RunningAgentsState:
     Represents the state of running agents.
 
     Attributes:
-        agent_id: ID of the finished agent.
+        agent_id: ID of the running agent.
         input_prompt: The input prompt used by the agent.
-        coroutine_handler: The asyncio Task handling the agent execution.
+        coroutine_handler: The asyncio task handling the agent execution.
         event_loop: The asyncio event loop running the task (for cross-thread cancel).
     """
 
     agent_id: int = -1
     input_prompt: str = ''
-    coroutine_handler: asyncio.Task = None
-    event_loop: asyncio.AbstractEventLoop = None
+    coroutine_handler: asyncio.Task = None  # type: ignore[assignment]
+    event_loop: asyncio.AbstractEventLoop = None  # type: ignore[assignment]
+
 
 @dataclass
 class FinishedAgentsState:
@@ -77,23 +91,34 @@ class FinishedAgentsState:
     agent_result: str = ''
     status: AgentStatus = AgentStatus.IDLE
 
-# class ContextState(Messages):
-#     """
-#     Represents the context state of a conversation with hierarchical agents.
-
-#     This state extends the base Messages state to include metadata
-#     about active agents being managed.
-
-#     Attributes:
-#         agents: Dictionary of active agents indexed by agent_id.
-#         next_agent_id: Counter for assigning unique agent IDs.
-#     """
-
-#     agents: dict[int, dict]
-#     next_agent_id: int
-
 
 class SupervisorManager(LangGraphBase):
+    """
+    Hierarchical multi-agent supervisor that coordinates multiple SinglePurposeAgent instances.
+
+    The SupervisorManager uses LLM-based decision-making to manage the lifecycle of agents,
+    including creating new agents for specific tasks, monitoring their execution, and
+    aggregating results. It maintains thread-safe lists of pending, running, and finished
+    agents, and provides tools for the LLM to interact with the agent management system.
+
+    The supervisor implements a LangGraph workflow that:
+    1. Receives user prompts and initializes the conversation state.
+    2. Analyzes tasks and decides on agent creation/deletion based on LLM reasoning.
+    3. Routes decisions through tool calls (create_agent, delete_agent, skip_agent).
+    4. Finalizes the conversation with aggregated results from all agents.
+
+    Attributes:
+        loop (asyncio.AbstractEventLoop): The event loop for managing async agent execution.
+        pending_agents_list (list[AgentTask]): Queue of agents waiting to be executed.
+        running_agents_list (list[RunningAgentsState]): List of currently executing agents.
+        finished_agents_list (list[FinishedAgentsState]): List of completed agents with results.
+        agent_id_counter (int): Counter for generating unique agent IDs.
+        agent_lists_lock (Lock): Thread-safe mutex for agent list access.
+        supervisor_tools (list): List of available tools for the LLM supervisor.
+        sys_prompt (str): System prompt loaded from file for supervisor behavior.
+        spa_params (dict): Parameters passed to SinglePurposeAgent instances.
+        ollama_agent (Ollama): Ollama LLM instance for agent reasoning.
+    """
 
     def __init__(
         self,
@@ -101,7 +126,7 @@ class SupervisorManager(LangGraphBase):
         ollama_agent: Ollama | None = None,
         max_steps: int = 5,
         system_prompt_path: str | None = None,
-        spa_params: dict | None = None, 
+        spa_params: dict | None = None,
         loop: asyncio.AbstractEventLoop | None = None
     ) -> None:
         """
@@ -110,10 +135,12 @@ class SupervisorManager(LangGraphBase):
         Creates the LLM instance with default configuration.
 
         Parameters:
-            system_prompt: The system prompt for the supervisor.
             logger: Optional ROS2 logger to use for logging (default: None).
             ollama_agent: Optional Ollama agent instance (default: None).
             max_steps: Maximum number of steps for the graph execution (default: 5).
+            system_prompt: The system prompt for the supervisor.
+            spa_params: Parameters for SinglePurposeAgent instances.
+            loop: Optional asyncio event loop to use (default: None).
 
         Returns:
             None
@@ -130,14 +157,15 @@ class SupervisorManager(LangGraphBase):
             raise ValueError('spa_params must be provided to SupervisorManager.')
         self.spa_params = spa_params
         self.ollama_agent: Ollama = self.ollama_agent
-        # List for pending agent, running agent, and finished agent states 
+        # List for pending agent, running agent, and finished agent states
         self.pending_agents_list: list[AgentTask] = []
         self.running_agents_list: list[RunningAgentsState] = []
         self.finished_agents_list: list[FinishedAgentsState] = []
         self.agent_id_counter: int = 1
         # Mutex lock for thread-safe access to agent lists
         self.agent_lists_lock = Lock()
-        self._get_system_prompt(system_prompt_path)  # Load system prompt to attribute sys_prompt
+        # Load system prompt to attribute sys_prompt
+        self._get_system_prompt(system_prompt_path)
         # Create tools with access to self
         self.supervisor_tools = self._create_supervisor_tools()
 
@@ -176,19 +204,20 @@ class SupervisorManager(LangGraphBase):
             supervisor._log(f'SUPERVISOR: Creating agent {agent_id} for task: {query}')
 
             # Prepare initial state for the agent
-            initial_state : Messages = {
-                "messages": [
-                    Message(role="user", content=query)
+            initial_state: Messages = {
+                'messages': [
+                    Message(role='user', content=query)
                 ]
             }
             # Extract parameters without modifying original dict
-            spa_max_steps = supervisor.spa_params.get("max_steps", 5)
-            spa_system_prompt_path = supervisor.spa_params.get("system_prompt_file")
-            
+            spa_max_steps = supervisor.spa_params.get('max_steps', 5)
+            spa_system_prompt_path = supervisor.spa_params.get('system_prompt_file')
+
             # Create a copy of spa_params without max_steps and system_prompt_file
-            ollama_params = {k: v for k, v in supervisor.spa_params.items() 
-                           if k not in ["max_steps", "system_prompt_file", 
-                                        "mcp_servers_config"]}
+            ollama_params = {
+                k: v for k, v in supervisor.spa_params.items()
+                if k not in ['max_steps', 'system_prompt_file', 'mcp_servers_config']
+            }
             # Create a new Ollama instance for this agent
             agent_ollama = Ollama(
                 **ollama_params
@@ -199,7 +228,7 @@ class SupervisorManager(LangGraphBase):
                 ollama_agent=agent_ollama,
                 max_steps=spa_max_steps,
                 system_prompt_path=spa_system_prompt_path,
-                mcp_servers_config=supervisor.spa_params.get("mcp_servers_config")
+                mcp_servers_config=supervisor.spa_params.get('mcp_servers_config')
             )
             new_agent.set_id(agent_id)
             new_agent.set_status(AgentStatus.RUNNING)
@@ -233,7 +262,7 @@ class SupervisorManager(LangGraphBase):
             # Get lock for thread-safe access
             supervisor.agent_lists_lock.acquire()
             # Check if agent exists
-            for i, running_agent in enumerate(supervisor.running_agents_list):
+            for _, running_agent in enumerate(supervisor.running_agents_list):
                 if running_agent.agent_id == agent_id:
                     query = running_agent.input_prompt
                     # Use call_soon_threadsafe to cancel from another thread safely
@@ -309,8 +338,11 @@ class SupervisorManager(LangGraphBase):
             }
         ]
 
-    async def run_agent(self, agent: SinglePurposeAgent, 
-                         initial_state: Messages) -> Messages:
+    async def run_agent(
+        self,
+        agent: SinglePurposeAgent,
+        initial_state: Messages
+    ) -> Messages:
         """
         Run an agent's graph asynchronously in the background.
 
@@ -322,12 +354,15 @@ class SupervisorManager(LangGraphBase):
             Messages: The final state after agent execution.
         """
         agent_id = agent.get_id()
-        execution_result = FinishedAgentsState(agent_id=agent_id,
-                                               input_prompt=initial_state['messages'][0]['content'],
-                                               agent_result='Execution failed.',
-                                               status=AgentStatus.FAILURE)
-        # Try to setup the agent before execution. It mcp client connection or tool retrieval fails,
-        # we catch the exception and continue the agent execution without those features.                                               
+        execution_result = FinishedAgentsState(
+            agent_id=agent_id,
+            input_prompt=initial_state['messages'][0]['content'],
+            agent_result='Execution failed.',
+            status=AgentStatus.FAILURE
+        )
+        # Try to setup the agent before execution.
+        # If MCP client connection or tool retrieval fails,
+        # we catch the exception and continue the agent execution without those features.
         try:
             self._log(f'AGENT [{agent_id}] {agent_id}: Starting execution pipeline...')
             # Ping MCP server to verify connection (already connected in create_agent)
@@ -354,7 +389,7 @@ class SupervisorManager(LangGraphBase):
             # Run the agent's graph
             self._log(f'AGENT [{agent_id}] {agent_id}: Executing task...')
             result = await agent.graph.ainvoke(initial_state)
-            execution_result.agent_result =  result['messages'][-1]['content']
+            execution_result.agent_result = result['messages'][-1]['content']
 
             # Update agent status based on execution result
             final_status = agent.get_status()
@@ -377,7 +412,7 @@ class SupervisorManager(LangGraphBase):
             self._log(f'ERROR in AGENT {agent_id}: {e}')
             agent.set_status(AgentStatus.FAILURE)
             execution_result.status = AgentStatus.FAILURE
-        
+
         # Store the execution result in the finished agents list
         self.agent_lists_lock.acquire()
         for running_agent in self.running_agents_list:
@@ -404,9 +439,6 @@ class SupervisorManager(LangGraphBase):
         Returns:
             Messages: The initialized conversation state with system and user messages.
         """
-        # Extract user query from input state
-        user_query = state.get('user_prompt', '')
-
         # Build context about current agents
         agents_list = [
             {
@@ -432,12 +464,12 @@ class SupervisorManager(LangGraphBase):
         rendered_system_prompt = template.render(
             agents_context=agents_list
         )
-        self._log(f'SUPERVISOR:\n--- Rendered system prompt  ---')
+        self._log('SUPERVISOR:\n--- Rendered system prompt  ---')
         self._log(f'\n\n{rendered_system_prompt}\n')
-        self._log(f'\n------------------------------')
+        self._log('\n------------------------------')
 
         # Create initial context state with rendered system prompt
-        state: Messages = {
+        current_state: Messages = {
             'messages': [
                 Message(
                     role='system',
@@ -446,16 +478,17 @@ class SupervisorManager(LangGraphBase):
             ]
         }
 
-        # Add user message if user prompt is set
+        # Extract user query from input state and add to messages if present
+        user_query = state.get('user_prompt', '')
         if user_query:
-            state['messages'].append(
+            current_state['messages'].append(
                 Message(
                     role='user',
                     content=user_query
                 )
             )
 
-        return state
+        return current_state
 
     @traceable
     async def analyze_task(self, state: Messages) -> Messages:
@@ -497,10 +530,9 @@ class SupervisorManager(LangGraphBase):
         Returns:
             str: Next node to transition to ('agent' to continue, 'finish' to end).
         """
-        self.steps += 1
+        self.steps: int = self.steps + 1
         uc = 'agent'
         self._log(f'SUPERVISOR: Managing steps, current step: {self.steps}')
-        # self._log(f'SUPERVISOR: Managing steps, current messages: {state["messages"]}')
         try:
             # Check if the last message contains a tool call
             if state['messages'] and state['messages'][-1]['role'] == 'tool':
@@ -510,16 +542,18 @@ class SupervisorManager(LangGraphBase):
             else:
                 self._log('No tool call detected, trying again.')
                 self._log(
-                    'SUPERVISOR: Incorrect response from assistant:\n' + f"{state['messages'][-1]['content']}")
+                    'SUPERVISOR: Incorrect response from assistant:\n'
+                    f"{state['messages'][-1]['content']}")
                 state['messages'].append(
                     Message(
                         role='user',
-                        content='Try again, remember to use the tools provided, you should not respond directly.'
+                        content='Try again, remember to use the tools provided, '
+                        'you should not respond directly.'
                     )
                 )
             if self.steps > self.max_steps:
-                    self._log('Maximum steps reached, finishing interaction NOW ...')
-                    uc = 'finish'
+                self._log('Maximum steps reached, finishing interaction NOW ...')
+                uc = 'finish'
             # Update messages count
             self.messages_count = len(state['messages'])
             self._log(f'SUPERVISOR: Total messages in conversation: {self.messages_count}')
@@ -552,35 +586,35 @@ class SupervisorManager(LangGraphBase):
         # Build context about current agents
         self.agent_lists_lock.acquire()
         # Log pending agents
-        self._log("\n--- IDLE AGENTS ---\n")
+        self._log('\n--- IDLE AGENTS ---\n')
         for agent_idle in self.pending_agents_list:
             self._log(
-                f"  Idle Agent [{agent_idle.agent.get_id()}]: " + 
-                f"{agent_idle.input_state['messages'][0]['content']} "
-                f"(Status: IDLE)"
+                f'  Idle Agent [{agent_idle.agent.get_id()}]: '
+                f'{agent_idle.input_state["messages"][0]["content"]} '
+                f'(Status: IDLE)'
             )
         # Log running agents
-        self._log("\n--- RUNNING AGENTS ---\n")
-        for agent in self.running_agents_list:
+        self._log('\n--- RUNNING AGENTS ---\n')
+        for agent_run in self.running_agents_list:
             self._log(
-                f"  Running Agent [{agent.agent_id}]: {agent.input_prompt} "
-                f"(Status: RUNNING)"
+                f'  Running Agent [{agent_run.agent_id}]: {agent_run.input_prompt} '
+                f'(Status: RUNNING)'
             )
         # Log finished agents
-        self._log("\n--- FINISHED AGENTS ---\n")
-        for agent in self.finished_agents_list:
+        self._log('\n--- FINISHED AGENTS ---\n')
+        for agent_finished in self.finished_agents_list:
             self._log(
-                f"  Finished Agent [{agent.agent_id}]: {agent.input_prompt} "
-                f"(Status: {agent.status})"
+                f'  Finished Agent [{agent_finished.agent_id}]: {agent_finished.input_prompt} '
+                f'(Status: {agent_finished.status})'
             )
 
         self.agent_lists_lock.release()
 
         self.messages_count = len(state['messages'])
-        self._log(f'SUPERVISOR: FINAL STEP Total messages in conversation: {self.messages_count}') 
+        self._log(f'SUPERVISOR: FINAL STEP Total messages in conversation: {self.messages_count}')
         # await self.current_task
         return state
-    
+
     # ========== GRAPH GENERATION ==========
 
     async def make_graph(self):
@@ -596,7 +630,6 @@ class SupervisorManager(LangGraphBase):
         Returns:
             None
         """
-
         # Define the supervisor workflow
         workflow = StateGraph(
             Messages,

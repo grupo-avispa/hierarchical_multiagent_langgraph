@@ -9,11 +9,11 @@ import os
 import sys
 
 from ament_index_python import get_package_share_directory
-
+from dotenv import load_dotenv
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
-from launch_ros.actions import Node
 from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
 from nav2_common.launch import RewrittenYaml
 
 # Loading packages from the current virtual environment
@@ -27,27 +27,31 @@ if venv_path:
     )
     sys.path.insert(0, site_packages)
 
-from dotenv import load_dotenv
 
 def generate_launch_description():
     # Get config .env file
-    hierarchical_multiagent_langgraph_dir = get_package_share_directory('hierarchical_multiagent_langgraph')
+    hierarchical_multiagent_langgraph_dir = get_package_share_directory(
+        'hierarchical_multiagent_langgraph')
     dotenv_path = os.path.join(hierarchical_multiagent_langgraph_dir, '.env')
     if os.path.exists(dotenv_path):
         load_dotenv(dotenv_path)
 
     # Get python from current virtual environment
     venv_python = os.path.join(os.environ.get('VIRTUAL_ENV', '/usr'), 'bin', 'python3')
-    
+
     # Getting directories and launch-files
-    default_params_file = os.path.join(hierarchical_multiagent_langgraph_dir, 'params', 'default_params.yaml')
-    default_mcp_servers_file = os.path.join(hierarchical_multiagent_langgraph_dir, 'params', 'spa_mcp.json')
-    default_supervisor_sys_prompt_file = os.path.join(hierarchical_multiagent_langgraph_dir, 'templates', 'supervisor_system_prompt.jinja')
-    default_agent_sys_prompt_file = os.path.join(hierarchical_multiagent_langgraph_dir, 'templates', 'agent_system_prompt.jinja')
+    default_params_file = os.path.join(
+        hierarchical_multiagent_langgraph_dir, 'params', 'default_params.yaml')
+    default_mcp_servers_file = os.path.join(
+        hierarchical_multiagent_langgraph_dir, 'params', 'spa_mcp.json')
+    default_supervisor_sys_prompt_file = os.path.join(
+        hierarchical_multiagent_langgraph_dir, 'templates', 'supervisor_system_prompt.jinja')
+    default_agent_sys_prompt_file = os.path.join(
+        hierarchical_multiagent_langgraph_dir, 'templates', 'agent_system_prompt.jinja')
 
     # Input parameters declaration
     params_file = LaunchConfiguration('params_file')
-    mcp_servers_file = LaunchConfiguration('mcp_servers_file')
+    # mcp_servers_file = LaunchConfiguration('mcp_servers_file')
     spa_mcp_servers_file = LaunchConfiguration('spa_mcp_servers_file')
     supervisor_sys_prompt_file = LaunchConfiguration('supervisor_sys_prompt_file')
     agent_sys_prompt_file = LaunchConfiguration('agent_sys_prompt_file')
