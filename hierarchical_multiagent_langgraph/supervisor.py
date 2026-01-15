@@ -326,6 +326,8 @@ class SupervisorManager(LangGraphBase):
                                                input_prompt=initial_state['messages'][0]['content'],
                                                agent_result='Execution failed.',
                                                status=AgentStatus.FAILURE)
+        # Try to setup the agent before execution. It mcp client connection or tool retrieval fails,
+        # we catch the exception and continue the agent execution without those features.                                               
         try:
             self._log(f'AGENT [{agent_id}] {agent_id}: Starting execution pipeline...')
             # Ping MCP server to verify connection (already connected in create_agent)
@@ -338,7 +340,12 @@ class SupervisorManager(LangGraphBase):
             # Ensure tools are registered before building the graph
             self._log(f'AGENT [{agent_id}] {agent_id}: Retrieving tools...')
             await agent.ollama_agent.retrieve_tools(agent.lang_tools)
-            
+
+        except Exception as e:
+            self._log(f'ERROR in AGENT {agent_id} during setup: {e}')
+
+        # Execute the agent's graph and invoke its tasks
+        try:
             # Build the agent's graph if not already built
             if agent.graph is None:
                 self._log(f'AGENT [{agent_id}] {agent_id}: Building graph...')
