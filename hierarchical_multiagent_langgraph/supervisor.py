@@ -813,4 +813,4 @@ class SupervisorManager(LangGraphBase):
         # Compile the graph with memory persistence
         memory = MemorySaver()
         self.graph = workflow.compile(checkpointer=memory)  # type: ignore[assignment]
-        self._log('Supervisor graph compiled successfully')
+        self._log_info('Supervisor graph compiled successfully')
