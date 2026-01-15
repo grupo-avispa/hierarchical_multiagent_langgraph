@@ -64,7 +64,7 @@ class AgentTask:
     """
 
     agent: SinglePurposeAgent = None  # type: ignore[assignment]
-    input_state: Messages = None
+    input_state: Messages = None  # type: ignore[assignment]
 
 
 @dataclass
@@ -280,7 +280,7 @@ class SupervisorManager(LangGraphBase):
             agent_id = supervisor.agent_id_counter
             supervisor.agent_id_counter += 1
 
-            supervisor._log(f'SUPERVISOR: Creating agent {agent_id} for task: {query}')
+            supervisor._log_info(f'SUPERVISOR: Creating agent {agent_id} for task: {query}')
 
             # Prepare initial state for the agent
             initial_state: Messages = {
@@ -318,7 +318,8 @@ class SupervisorManager(LangGraphBase):
             supervisor.agent_lists_lock.acquire()
             supervisor.pending_agents_list.append(agent_task)
             supervisor.agent_lists_lock.release()
-            supervisor._log(f'SUPERVISOR: Agent {agent_id} added to pending list successfully.')
+            supervisor._log_info(
+                f'SUPERVISOR: Agent {agent_id} added to pending list successfully.')
 
             return f'Agent {agent_id} created successfully for task: {query}'
 
@@ -377,7 +378,7 @@ class SupervisorManager(LangGraphBase):
                     break
             supervisor.agent_lists_lock.release()
 
-            supervisor._log(message)
+            supervisor._log_info(message)
             return message
 
         @tool(
@@ -401,7 +402,7 @@ class SupervisorManager(LangGraphBase):
             Returns:
                 str: Confirmation message indicating no action was taken.
             """
-            supervisor._log('Skipping agent action')
+            supervisor._log_info('Skipping agent action')
             return 'No agent action needed for this request'
 
         # Return tools in the format expected by Ollama
@@ -452,7 +453,7 @@ class SupervisorManager(LangGraphBase):
         self,
         agent: SinglePurposeAgent,
         initial_state: Messages
-    ) -> Messages:
+    ) -> None:
         """
         Execute a SinglePurposeAgent's LangGraph workflow asynchronously in background.
 
@@ -516,40 +517,41 @@ class SupervisorManager(LangGraphBase):
         # If MCP client connection or tool retrieval fails,
         # we catch the exception and continue the agent execution without those features.
         try:
-            self._log(f'AGENT [{agent_id}] {agent_id}: Starting execution pipeline...')
+            self._log_info(f'AGENT [{agent_id}] {agent_id}: Starting execution pipeline...')
             # Ping MCP server to verify connection (already connected in create_agent)
-            if agent.ollama_agent.mcp_client is not None:
-                async with agent.ollama_agent.mcp_client as client:
-                    self._log(f'AGENT [{agent_id}] {agent_id}: PING ...')
+            if agent.ollama_agent.mcp_client is not None:  # type: ignore[union-attr]
+                async with agent.ollama_agent.mcp_client as client:  # type: ignore[union-attr]
+                    self._log_debug(f'AGENT [{agent_id}] {agent_id}: PING ...')
                     await client.ping()
-                self._log(f'AGENT [{agent_id}] {agent_id}: MCP client connection verified')
+                self._log_info(f'AGENT [{agent_id}] {agent_id}: MCP client connection verified')
 
             # Ensure tools are registered before building the graph
-            self._log(f'AGENT [{agent_id}] {agent_id}: Retrieving tools...')
-            await agent.ollama_agent.retrieve_tools(agent.lang_tools)
+            self._log_info(f'AGENT [{agent_id}] {agent_id}: Retrieving tools...')
+            await agent.ollama_agent.retrieve_tools(agent.lang_tools)  # type: ignore[union-attr]
 
         except Exception as e:
-            self._log(f'ERROR in AGENT {agent_id} during setup: {e}')
+            self._log_error(f'ERROR in AGENT {agent_id} during setup: {e}')
 
         # Execute the agent's graph and invoke its tasks
         try:
             # Build the agent's graph if not already built
             if agent.graph is None:
-                self._log(f'AGENT [{agent_id}] {agent_id}: Building graph...')
+                self._log_info(f'AGENT [{agent_id}] {agent_id}: Building graph...')
                 await agent.make_graph()
 
             # Run the agent's graph
-            self._log(f'AGENT [{agent_id}] {agent_id}: Executing task...')
-            result = await agent.graph.ainvoke(initial_state)
+            self._log_info(f'AGENT [{agent_id}] {agent_id}: Executing task...')
+            result = await agent.graph.ainvoke(initial_state)  # type: ignore[attr-defined]
             execution_result.agent_result = result['messages'][-1]['content']
 
             # Update agent status based on execution result
             final_status = agent.get_status()
             execution_result.status = final_status
-            self._log(f'AGENT [{agent_id}] {agent_id}: Task completed with status: {final_status}')
+            self._log_info(
+                f'AGENT [{agent_id}] {agent_id}: Task completed with status: {final_status}')
 
         except asyncio.CancelledError:
-            self._log(f'AGENT [{agent_id}]: Execution cancelled by supervisor.')
+            self._log_error(f'AGENT [{agent_id}]: Execution cancelled by supervisor.')
             agent.set_status(AgentStatus.FAILURE)
             execution_result.status = AgentStatus.FAILURE
             execution_result.agent_result = 'Agent execution was cancelled.'
@@ -561,7 +563,7 @@ class SupervisorManager(LangGraphBase):
             # Re-raise to propagate cancellation to the event loop
             raise
         except Exception as e:
-            self._log(f'ERROR in AGENT {agent_id}: {e}')
+            self._log_error(f'ERROR in AGENT {agent_id}: {e}')
             agent.set_status(AgentStatus.FAILURE)
             execution_result.status = AgentStatus.FAILURE
 
@@ -616,9 +618,9 @@ class SupervisorManager(LangGraphBase):
         rendered_system_prompt = template.render(
             agents_context=agents_list
         )
-        self._log('SUPERVISOR:\n--- Rendered system prompt  ---')
-        self._log(f'\n\n{rendered_system_prompt}\n')
-        self._log('\n------------------------------')
+        self._log_info('SUPERVISOR:\n--- Rendered system prompt  ---')
+        self._log_info(f'\n\n{rendered_system_prompt}\n')
+        self._log_info('\n------------------------------')
 
         # Create initial context state with rendered system prompt
         current_state: Messages = {
@@ -657,13 +659,13 @@ class SupervisorManager(LangGraphBase):
         Returns:
             Messages: Updated state with LLM response.
         """
-        self._log('SUPERVISOR: Analyzing task and processing supervisor decision...')
+        self._log_info('SUPERVISOR: Analyzing task and processing supervisor decision...')
 
         # Invoke Ollama with the current messages
         try:
             state = await self.ollama_agent.invoke(state=state)
         except ValueError as e:
-            self._log(f'SUPERVISOR: Error during Ollama agent invocation: {e}')
+            self._log_error(f'SUPERVISOR: Error during Ollama agent invocation: {e}')
             raise e
 
         return state
@@ -684,16 +686,16 @@ class SupervisorManager(LangGraphBase):
         """
         self.steps: int = self.steps + 1
         uc = 'agent'
-        self._log(f'SUPERVISOR: Managing steps, current step: {self.steps}')
+        self._log_info(f'SUPERVISOR: Managing steps, current step: {self.steps}')
         try:
             # Check if the last message contains a tool call
             if state['messages'] and state['messages'][-1]['role'] == 'tool':
                 # Finish if tool call detected
-                self._log('Tool call detected in the last message.')
+                self._log_info('Tool call detected in the last message.')
                 uc = 'finish'
             else:
-                self._log('No tool call detected, trying again.')
-                self._log(
+                self._log_warning('No tool call detected, trying again.')
+                self._log_warning(
                     'SUPERVISOR: Incorrect response from assistant:\n'
                     f"{state['messages'][-1]['content']}")
                 state['messages'].append(
@@ -704,13 +706,13 @@ class SupervisorManager(LangGraphBase):
                     )
                 )
             if self.steps > self.max_steps:
-                self._log('Maximum steps reached, finishing interaction NOW ...')
+                self._log_warning('Maximum steps reached, finishing interaction NOW ...')
                 uc = 'finish'
             # Update messages count
             self.messages_count = len(state['messages'])
-            self._log(f'SUPERVISOR: Total messages in conversation: {self.messages_count}')
+            self._log_info(f'SUPERVISOR: Total messages in conversation: {self.messages_count}')
         except Exception as e:
-            self._log(f'SUPERVISOR: Error in manage_steps: {e}')
+            self._log_error(f'SUPERVISOR: Error in manage_steps: {e}')
             uc = 'finish'
         return uc
 
@@ -727,35 +729,35 @@ class SupervisorManager(LangGraphBase):
         Returns:
             Messages: Final state after cleanup and finalization.
         """
-        self._log('SUPERVISOR: Finalizing supervisor interaction.')
+        self._log_info('SUPERVISOR: Finalizing supervisor interaction.')
         if self.steps >= self.max_steps:
-            self._log('SUPERVISOR: Maximum steps reached during finalization.')
+            self._log_warning('SUPERVISOR: Maximum steps reached during finalization.')
         else:
-            self._log('SUPERVISOR: Agent reached final state before maximum steps.')
+            self._log_info('SUPERVISOR: Agent reached final state before maximum steps.')
         self.steps = 0
         self.ollama_agent.reset_memory()
 
         # Build context about current agents
         self.agent_lists_lock.acquire()
         # Log pending agents
-        self._log('\n--- IDLE AGENTS ---\n')
+        self._log_info('\n--- IDLE AGENTS ---\n')
         for agent_idle in self.pending_agents_list:
-            self._log(
+            self._log_info(
                 f'  Idle Agent [{agent_idle.agent.get_id()}]: '
                 f'{agent_idle.input_state["messages"][0]["content"]} '
                 f'(Status: IDLE)'
             )
         # Log running agents
-        self._log('\n--- RUNNING AGENTS ---\n')
+        self._log_info('\n--- RUNNING AGENTS ---\n')
         for agent_run in self.running_agents_list:
-            self._log(
+            self._log_info(
                 f'  Running Agent [{agent_run.agent_id}]: {agent_run.input_prompt} '
                 f'(Status: RUNNING)'
             )
         # Log finished agents
-        self._log('\n--- FINISHED AGENTS ---\n')
+        self._log_info('\n--- FINISHED AGENTS ---\n')
         for agent_finished in self.finished_agents_list:
-            self._log(
+            self._log_info(
                 f'  Finished Agent [{agent_finished.agent_id}]: {agent_finished.input_prompt} '
                 f'(Status: {agent_finished.status})'
             )
@@ -763,7 +765,8 @@ class SupervisorManager(LangGraphBase):
         self.agent_lists_lock.release()
 
         self.messages_count = len(state['messages'])
-        self._log(f'SUPERVISOR: FINAL STEP Total messages in conversation: {self.messages_count}')
+        self._log_info(
+            f'SUPERVISOR: FINAL STEP Total messages in conversation: {self.messages_count}')
         # await self.current_task
         return state
 
