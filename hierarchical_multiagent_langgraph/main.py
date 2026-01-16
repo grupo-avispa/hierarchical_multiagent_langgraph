@@ -325,7 +325,7 @@ class HierarchicalMultiagent(LangGraphRosBase):
         result = self.loop.run_until_complete(
             self.supervisor_manager.graph.ainvoke(input_state, config=config)
         )
-        print(f'Asynchronous processing result: {result}')
+        # print(f'Asynchronous processing result: {result}')
 
     def agent_callback(self, request, response):
         """

@@ -517,30 +517,29 @@ class SupervisorManager(LangGraphBase):
         # If MCP client connection or tool retrieval fails,
         # we catch the exception and continue the agent execution without those features.
         try:
-            self._log_info(f'AGENT [{agent_id}] {agent_id}: Starting execution pipeline...')
+            self._log_info(f'AGENT [{agent_id}]: Starting execution pipeline...')
             # Ping MCP server to verify connection (already connected in create_agent)
             if agent.ollama_agent.mcp_client is not None:  # type: ignore[union-attr]
                 async with agent.ollama_agent.mcp_client as client:  # type: ignore[union-attr]
-                    self._log_debug(f'AGENT [{agent_id}] {agent_id}: PING ...')
                     await client.ping()
-                self._log_info(f'AGENT [{agent_id}] {agent_id}: MCP client connection verified')
+                self._log_info(f'AGENT [{agent_id}]: MCP client connection verified')
 
             # Ensure tools are registered before building the graph
-            self._log_info(f'AGENT [{agent_id}] {agent_id}: Retrieving tools...')
+            self._log_info(f'AGENT [{agent_id}]: Retrieving tools...')
             await agent.ollama_agent.retrieve_tools(agent.lang_tools)  # type: ignore[union-attr]
 
         except Exception as e:
-            self._log_error(f'ERROR in AGENT {agent_id} during setup: {e}')
+            self._log_error(f'ERROR in AGENT [{agent_id}] during setup: {e}')
 
         # Execute the agent's graph and invoke its tasks
         try:
             # Build the agent's graph if not already built
             if agent.graph is None:
-                self._log_info(f'AGENT [{agent_id}] {agent_id}: Building graph...')
+                self._log_info(f'AGENT [{agent_id}]: Building graph...')
                 await agent.make_graph()
 
             # Run the agent's graph
-            self._log_info(f'AGENT [{agent_id}] {agent_id}: Executing task...')
+            self._log_info(f'AGENT [{agent_id}]: Executing task...')
             result = await agent.graph.ainvoke(initial_state)  # type: ignore[attr-defined]
             execution_result.agent_result = result['messages'][-1]['content']
 
@@ -548,7 +547,7 @@ class SupervisorManager(LangGraphBase):
             final_status = agent.get_status()
             execution_result.status = final_status
             self._log_info(
-                f'AGENT [{agent_id}] {agent_id}: Task completed with status: {final_status}')
+                f'AGENT [{agent_id}]: Task completed with status: {final_status}')
 
         except asyncio.CancelledError:
             self._log_error(f'AGENT [{agent_id}]: Execution cancelled by supervisor.')
@@ -618,9 +617,9 @@ class SupervisorManager(LangGraphBase):
         rendered_system_prompt = template.render(
             agents_context=agents_list
         )
-        self._log_info('SUPERVISOR:\n--- Rendered system prompt  ---')
-        self._log_info(f'\n\n{rendered_system_prompt}\n')
-        self._log_info('\n------------------------------')
+        # self._log_info('SUPERVISOR:\n--- Rendered system prompt  ---')
+        # self._log_info(f'\n\n{rendered_system_prompt}\n')
+        # self._log_info('\n------------------------------')
 
         # Create initial context state with rendered system prompt
         current_state: Messages = {
