@@ -1,5 +1,6 @@
 dotenv
-fastmcp>=2.12.0
+fastmcp<=2.12.3
+mcp<=1.11.0
 jinja2>=3.1.6
 langchain>=1.0.0
 langchain_core>=1.0.0
