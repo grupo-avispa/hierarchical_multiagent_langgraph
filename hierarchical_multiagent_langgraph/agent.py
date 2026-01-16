@@ -147,11 +147,11 @@ class SinglePurposeAgent(LangGraphBase):
                 # Open json config file
                 with open(mcp_servers_config, 'r') as f:
                     config_data = json.load(f)
-                self.ollama_agent.mcp_client = Client(config_data)
+                self.ollama_agent.mcp_client = Client(config_data)  # type: ignore[union-attr]
                 self._log_info('AGENT: MCP client initialized successfully')
             except Exception as e:
                 self._log_info(f'Error initializing MCP client: {e}')
-                self.ollama_agent.mcp_client = None
+                self.ollama_agent.mcp_client = None  # type: ignore[union-attr]
 
     def set_id(self, agent_id: int) -> None:
         """
@@ -258,7 +258,7 @@ class SinglePurposeAgent(LangGraphBase):
             if not has_sys_message:
                 # Get resources
                 resources_content = []
-                if self.ollama_agent.mcp_client is not None:
+                if self.ollama_agent is not None and self.ollama_agent.mcp_client is not None:
                     try:
                         async with self.ollama_agent.mcp_client as client:
                             resources = await client.list_resources()
@@ -278,7 +278,7 @@ class SinglePurposeAgent(LangGraphBase):
                     role='system',
                     content=rendered_system_prompt
                 ))
-            self.state = await self.ollama_agent.invoke(state=state)
+            self.state = await self.ollama_agent.invoke(state=state)  # type: ignore[union-attr]
         except ValueError as e:
             self._log_error(f'AGENT: Error during Ollama agent invocation: {e}')
             raise e
@@ -396,7 +396,7 @@ class SinglePurposeAgent(LangGraphBase):
             self._log_info('AGENT: Agent reached final state before maximum steps.')
             self.status = AgentStatus.SUCCESS
         self.steps = 0
-        self.ollama_agent.reset_memory()
+        self.ollama_agent.reset_memory()  # type: ignore[union-attr]
         return state
 
     # ========== GRAPH GENERATION ==========
