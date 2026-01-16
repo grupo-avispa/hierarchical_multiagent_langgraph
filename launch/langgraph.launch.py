@@ -9,7 +9,6 @@ import os
 import sys
 
 from ament_index_python import get_package_share_directory
-from dotenv import load_dotenv
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
@@ -27,6 +26,7 @@ if venv_path:
     )
     sys.path.insert(0, site_packages)
 
+from dotenv import load_dotenv
 
 def generate_launch_description():
     # Get config .env file
