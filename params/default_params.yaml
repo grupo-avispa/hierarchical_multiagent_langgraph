@@ -10,6 +10,7 @@ langgraph_agent_node:
     # Model chat template file path
     spa_template_type: "qwen3"
     template_type: "qwen3"
+    template_file: "qwen3.jinja"
     
     # LLM model name (for Ollama)
     spa_llm_model: "qwen3:32b"
@@ -31,8 +32,8 @@ langgraph_agent_node:
     repeat_penalty: 1.1
     top_k: 10
     top_p: 0.25
-    num_ctx: 8192
-    num_predict: 1024
+    num_ctx: 16384
+    num_predict: 2048
     
     # LangGraph workflow parameters
     spa_max_steps: 5

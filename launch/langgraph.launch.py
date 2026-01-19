@@ -48,6 +48,8 @@ def generate_launch_description():
         hierarchical_multiagent_langgraph_dir, 'templates', 'supervisor_system_prompt.jinja')
     default_agent_sys_prompt_file = os.path.join(
         hierarchical_multiagent_langgraph_dir, 'templates', 'agent_system_prompt.jinja')
+    default_template = os.path.join(
+        hierarchical_multiagent_langgraph_dir, 'templates', 'qwen3.jinja')
 
     # Input parameters declaration
     params_file = LaunchConfiguration('params_file')
@@ -55,12 +57,18 @@ def generate_launch_description():
     spa_mcp_servers_file = LaunchConfiguration('spa_mcp_servers_file')
     supervisor_sys_prompt_file = LaunchConfiguration('supervisor_sys_prompt_file')
     agent_sys_prompt_file = LaunchConfiguration('agent_sys_prompt_file')
+    template_file = LaunchConfiguration('template_file')
     log_level = LaunchConfiguration('log-level')
 
     declare_params_file_arg = DeclareLaunchArgument(
         'params_file',
         default_value=default_params_file,
         description='Full path to the ROS2 parameters file with configuration'
+    )
+    declare_template_file_arg = DeclareLaunchArgument(
+        'template_file',
+        default_value=default_template,
+        description='Full path to the template file'
     )
 
     # declare_mcp_servers_file_arg = DeclareLaunchArgument(
@@ -99,6 +107,7 @@ def generate_launch_description():
         'spa_mcp_servers': spa_mcp_servers_file,
         'system_prompt_file': supervisor_sys_prompt_file,
         'spa_system_prompt_file': agent_sys_prompt_file,
+        'template_file': template_file,
     }
 
     configured_params = RewrittenYaml(
@@ -123,6 +132,7 @@ def generate_launch_description():
         declare_params_file_arg,
         # declare_mcp_servers_file_arg,
         declare_spa_mcp_servers_file_arg,
+        declare_template_file_arg,
         declare_supervisor_sys_prompt_file_arg,
         declare_agent_sys_prompt_file_arg,
         declare_log_level_arg,
