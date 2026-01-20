@@ -25,7 +25,7 @@ from llm_interactions_msgs.srv import CallAgent
 
 
 import rclpy
-from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.callback_groups import ReentrantCallbackGroup, MutuallyExclusiveCallbackGroup
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 
 
@@ -106,8 +106,7 @@ class HierarchicalMultiagent(LangGraphRosBase):
             ollama_agent=self.ollama_agent,
             max_steps=self.max_steps,
             system_prompt_path=self.system_prompt_file,
-            spa_params=self.spa_params,
-            loop=self.loop
+            spa_params=self.spa_params
         )
 
         # Retrieve tools for Ollama agent
@@ -120,12 +119,13 @@ class HierarchicalMultiagent(LangGraphRosBase):
         self.build_graph()
 
         # Create the subscriber to listen for user queries
-        self.group = ReentrantCallbackGroup()
+        self._timer_group = ReentrantCallbackGroup()
+        self._srv_group = MutuallyExclusiveCallbackGroup()
         self.agent_srv = self.create_service(
             srv_type=CallAgent,
             srv_name=self.service_name,
             callback=self.agent_callback,
-            callback_group=self.group
+            callback_group=self._srv_group
         )
 
         # Create timer to consume pending agents from the queue
@@ -133,7 +133,7 @@ class HierarchicalMultiagent(LangGraphRosBase):
         self.agent_timer = self.create_timer(
             1.0,  # Timer period in seconds
             self._agent_execution_timer_callback,
-            callback_group=self.group
+            callback_group=self._timer_group
         )
 
         self.get_logger().info('Hierarchical Multiagent LangGraph Node has been started.')
@@ -195,10 +195,13 @@ class HierarchicalMultiagent(LangGraphRosBase):
         self.supervisor_manager.agent_lists_lock.release()
 
         if agent_idle is not None:
+
             agent_id = agent_idle.agent.get_id()
+
+            # No existing loop, safe to create a new one
             self.get_logger().info(
-                f'Timer: Starting execution of agent {agent_id} in thread '
-                f'[{threading.current_thread().name}]')
+                f'Timer: No event loop running. Creating new loop for agent '
+                f'{agent_id} in thread [{threading.current_thread().name}]')
             # Create a new event loop for this thread
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
@@ -210,6 +213,9 @@ class HierarchicalMultiagent(LangGraphRosBase):
                     agent_idle.input_state
                 ))
 
+            self.get_logger().info(
+                f'Starting execution of agent [{agent_id}] '
+                f'in thread [{threading.current_thread().name}]...')    
             # Create running agent object with all required fields
             running_agent = RunningAgentsState(
                 agent_id=agent_id,
@@ -399,7 +405,9 @@ class HierarchicalMultiagent(LangGraphRosBase):
         self._process_graph_async(input_state, thread_id)
         response.agent_response = 'Query submitted for processing'
 
+        self.get_logger().info('Query processing submitted; returning response to caller.')
         return response
+
 
     def get_spa_params(self) -> None:
         """

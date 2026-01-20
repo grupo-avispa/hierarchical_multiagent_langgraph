@@ -161,7 +161,6 @@ class SupervisorManager(LangGraphBase):
         max_steps: int = 5,
         system_prompt_path: str | None = None,
         spa_params: dict | None = None,
-        loop: asyncio.AbstractEventLoop | None = None
     ) -> None:
         """
         Initialize the Supervisor Manager.
@@ -194,7 +193,6 @@ class SupervisorManager(LangGraphBase):
             ollama_agent=ollama_agent,
             max_steps=max_steps
         )
-        self.loop = loop if loop is not None else asyncio.get_event_loop()
         if self.ollama_agent is None:
             raise ValueError('Ollama agent instance must be provided to LangGraphManager.')
         if spa_params is None:
