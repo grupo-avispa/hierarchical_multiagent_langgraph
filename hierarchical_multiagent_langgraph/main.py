@@ -484,6 +484,13 @@ class HierarchicalMultiagent(LangGraphRosBase):
             'spa_template_type').get_parameter_value().string_value
         self.get_logger().info(
             f'The parameter spa_template_type is set to: [{self.spa_params["template_type"]}]')
+        
+        # Declare and retrieve model chat template file name parameter
+        self.declare_parameter('spa_template_file', 'qwen3.jinja')
+        self.spa_params['template_file'] = self.get_parameter(
+            'spa_template_file').get_parameter_value().string_value
+        self.get_logger().info(
+            f'The parameter spa_template_file is set to: [{self.spa_params["template_file"]}]')
 
         # Declare and retrieve LLM model name parameter
         self.declare_parameter('spa_llm_model', 'qwen3:0.6b')
@@ -498,6 +505,14 @@ class HierarchicalMultiagent(LangGraphRosBase):
         self.get_logger().info(
             f'The parameter spa_tool_call_pattern is set to: '
             f'[{self.spa_params["tool_call_pattern"]}]')
+
+        # Declare and retrieve available tools for SPA agents
+        self.declare_parameter('spa_available_tools', ['execute_behavior_tree'])
+        self.spa_params['available_tools'] = self.get_parameter(
+            'spa_available_tools').get_parameter_value().string_array_value
+        self.get_logger().info(
+            f'The parameter spa_available_tools is set to: '
+            f'[{self.spa_params["available_tools"]}]')
 
         # Declare and retrieve LangGraph workflow parameters
         self.declare_parameter('spa_max_steps', 5)
