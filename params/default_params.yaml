@@ -14,7 +14,7 @@ langgraph_agent_node:
     spa_template_file: "qwen3.jinja"
     
     # LLM model name (for Ollama)
-    spa_llm_model: "qwen3:32b"
+    spa_llm_model: "qwen3:8b"
     llm_model: "qwen3:32b"
     
     # Tool call regex pattern to extract tool calls from LLM response
@@ -22,7 +22,7 @@ langgraph_agent_node:
     tool_call_pattern: "<tool_call>(.*?)</tool_call>"
 
     # Available tools for the supervisor and SPA agents
-    available_tools: ["delete_behavior_tree"]
+    available_tools: ["stop_behavior_tree"]
     spa_available_tools: ["execute_behavior_tree"]
 
     # System prompt template file path

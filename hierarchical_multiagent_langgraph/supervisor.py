@@ -277,7 +277,7 @@ class SupervisorManager(LangGraphBase):
             """
             agent_id = supervisor.agent_id_counter
             supervisor.agent_id_counter += 1
-
+            query = f'Your assigned agent ID is {agent_id}. And your task is: {query}'
             supervisor._log_info(f'SUPERVISOR: Creating agent {agent_id} for task: {query}')
 
             # Prepare initial state for the agent
