@@ -47,6 +47,11 @@ With some scan source running, run the hierarchical_multiagent_langgraph node wi
 ros2 launch hierarchical_multiagent_langgraph langgraph.launch.py
 ```
 
+Then, the agent can be called with:
+
+```bash
+ros2 service call /hierarchical_multiagent/call_agent llm_interactions_msgs/srv/CallAgent "{query: 'Prepare a cup of coffee'}"
+```
 
 ## System Architecture
 
@@ -240,44 +245,4 @@ Specialized agent for individual tasks:
 - **Own graph**: Independent reasoning cycle
 - **Isolation**: Separate event loop per agent
 
-## Dependencies
 
-- `rclpy` - ROS2 Python client
-- `langgraph_base_ros` - Base for LangGraph-ROS2 integration
-- `llm_interactions_msgs` - Messages for LLM services
-- `langchain` / `langgraph` - Agent framework
-- `ollama` - Ollama server client
-- `fastmcp` - Model Context Protocol client
-- `jinja2` - Template engine
-
-## Usage
-
-### Basic Launch
-
-```bash
-ros2 launch hierarchical_multiagent_langgraph hierarchical_multiagent.launch.py
-```
-
-### Service Call
-
-```bash
-ros2 service call /hierarchical_multiagent/call_agent llm_interactions_msgs/srv/CallAgent "{query: 'Prepare a cup of coffee'}"
-```
-
-## ROS2 Parameters
-
-| Parameter                | Type   | Default                 | Description               |
-| ------------------------ | ------ | ----------------------- | ------------------------- |
-| `spa_mcp_servers`        | string | `'mcp.json'`            | MCP servers configuration |
-| `spa_system_prompt_file` | string | `'system_prompt.jinja'` | System prompt for agents  |
-| `spa_template_type`      | string | `'qwen3'`               | Chat template type        |
-| `spa_llm_model`          | string | `'qwen3:0.6b'`          | Ollama model to use       |
-| `spa_max_steps`          | int    | `5`                     | Maximum steps per agent   |
-
-## License
-
-TODO: License declaration
-
-## Author
-
-Alberto Tudela (ajtudela@gmail.com)
