@@ -371,7 +371,26 @@ class SupervisorManager(LangGraphBase):
                         )
                     else:
                         running_agent.coroutine_handler.cancel()
+                    # Stop agents running behavior and remove from list
+                    if supervisor.ollama_agent.mcp_client is not None:
+                        try:
+                            supervisor.ollama_agent.mcp_client.call_tool(
+                                    "stop_behavior_tree",
+                                    arguments={"execution_id": agent_id}
+                                )
+                        except Exception as e:
+                            supervisor._log_error(
+                                f'ERROR stopping behavior tree for AGENT [{agent_id}]: {e}'
+                            )
                     supervisor.running_agents_list.remove(running_agent)
+                    # Create finished agent state with FAILURE due to cancellation
+                    finished_state = FinishedAgentsState(
+                        agent_id=agent_id,
+                        input_prompt=query,
+                        agent_result='Agent execution was cancelled by supervisor.',
+                        status=AgentStatus.FAILURE
+                    )
+                    supervisor.finished_agents_list.append(finished_state)
                     message = f'Agent {agent_id} deleted successfully (was working on: {query})'
                     break
             supervisor.agent_lists_lock.release()
@@ -549,15 +568,6 @@ class SupervisorManager(LangGraphBase):
 
         except asyncio.CancelledError:
             self._log_error(f'AGENT [{agent_id}]: Execution cancelled by supervisor.')
-            agent.set_status(AgentStatus.FAILURE)
-            execution_result.status = AgentStatus.FAILURE
-            execution_result.agent_result = 'Agent execution was cancelled.'
-            # Store result before re-raising
-            self.agent_lists_lock.acquire()
-            # Agent already removed from running_agents_list by delete_agent
-            self.finished_agents_list.append(execution_result)
-            self.agent_lists_lock.release()
-            # Re-raise to propagate cancellation to the event loop
             raise
         except Exception as e:
             self._log_error(f'ERROR in AGENT {agent_id}: {e}')
@@ -758,7 +768,7 @@ class SupervisorManager(LangGraphBase):
                 f'  Finished Agent [{agent_finished.agent_id}]: {agent_finished.input_prompt} '
                 f'(Status: {agent_finished.status})'
             )
-
+        self._log_info('\n-------------------\n')
         self.agent_lists_lock.release()
 
         self.messages_count = len(state['messages'])
