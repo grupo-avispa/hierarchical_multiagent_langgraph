@@ -15,6 +15,7 @@ Key components:
 """
 
 import asyncio
+import threading
 from dataclasses import dataclass
 from threading import Lock
 from typing import TypedDict
@@ -582,6 +583,99 @@ class SupervisorManager(LangGraphBase):
                 break
         self.finished_agents_list.append(execution_result)
         self.agent_lists_lock.release()
+
+    def consume_pending_agents(self) -> None:
+        """
+        Consume pending agents from queue and execute in dedicated threads.
+
+        Called periodically by a timer in main node. Implements producer-consumer
+        pattern: supervisor (producer) adds agents to pending_agents_list, this method
+        (consumer) executes them. Each agent runs in its own thread with independent
+        asyncio event loop, preventing blocking of supervisor executor.
+
+        Execution Sequence:
+            1. Check pending_agents_list for queued agents (thread-safe with lock)
+            2. If agent pending: pop from queue
+            3. Create new asyncio.AbstractEventLoop for dedicated thread
+            4. Create task: loop.create_task(self.run_agent(...))
+            5. Wrap task in RunningAgentsState with loop reference
+            6. Add to running_agents_list (thread-safe with lock)
+            7. Block current thread: loop.run_until_complete(agent_task)
+            8. Wait for agent completion, handle cancellation
+
+        Thread Model:
+            - Callback runs in supervisor executor's thread (MultiThreadedExecutor)
+            - Agent task (loop.run_until_complete) blocks callback thread temporarily
+            - Agent's asyncio operations don't block supervisor's main event loop
+            - Multiple agents can run concurrently in different timer callbacks
+
+        State Management:
+            - Reads: pending_agents_list (protected by agent_lists_lock)
+            - Writes: running_agents_list (protected by agent_lists_lock)
+            - Creates: RunningAgentsState with agent_id, input_prompt, task, loop
+            - Transitions: pending → running → finished (by run_agent)
+
+        Error Handling:
+            - Catches asyncio.CancelledError when agent is forcefully cancelled
+            - Logs cancellation status; cleanup handled by run_agent()
+
+        Parameters:
+            None: Uses instance state (pending_agents_list, running_agents_list, etc.)
+
+        Returns:
+            None
+
+        Side Effects:
+            - Modifies pending_agents_list (pops one agent per call)
+            - Modifies running_agents_list (appends RunningAgentsState)
+            - Creates new asyncio event loop for dedicated thread
+            - Blocks calling thread during agent execution
+            - Logs agent status via logger
+        """
+        # Try to get a pending agent from the list
+        agent_idle = None
+        self.agent_lists_lock.acquire()
+        if len(self.pending_agents_list) > 0:
+            agent_idle = self.pending_agents_list.pop(0)
+        self.agent_lists_lock.release()
+
+        if agent_idle is not None:
+            agent_id = agent_idle.agent.get_id()
+            self._log_info(
+                f'Starting execution of agent {agent_id} in thread '
+                f'[{threading.current_thread().name}]')
+            # Create a new event loop for this thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+
+            # Schedule the agent execution coroutine in the new event loop
+            agent_task = loop.create_task(
+                self.run_agent(
+                    agent_idle.agent,
+                    agent_idle.input_state
+                ))
+
+            # Create running agent object with all required fields
+            running_agent = RunningAgentsState(
+                agent_id=agent_id,
+                input_prompt=agent_idle.input_state['messages'][0]['content'],
+                coroutine_handler=agent_task,
+                event_loop=loop
+            )
+
+            # Add to running agents list
+            self.agent_lists_lock.acquire()
+            self.running_agents_list.append(running_agent)
+            self.agent_lists_lock.release()
+
+            # Need to await the agent task to completion
+            try:
+                self._log_info(
+                    f'Working on agent [{agent_id}]'
+                    f' in thread [{threading.current_thread().name}]...')
+                loop.run_until_complete(agent_task)
+            except asyncio.CancelledError:
+                self._log_info(f'Agent {agent_id} execution was cancelled.')
 
     # ========== LANGGRAPH NODES ==========
 

@@ -12,12 +12,8 @@ Main Components:
     - Agent execution threads: Each agent runs in its own event loop for isolation.
 """
 
-import asyncio
-import threading
-
 from hierarchical_multiagent_langgraph.supervisor import (
     InputState,
-    RunningAgentsState,
     SupervisorManager
 )
 from langgraph_base_ros.langgraph_ros_base import LangGraphRosBase
@@ -49,10 +45,12 @@ class HierarchicalMultiagent(LangGraphRosBase):
         1. ROS2 service receives user query (CallAgent request).
         2. Query forwarded to supervisor's LangGraph workflow.
         3. Supervisor decides to create/delete agents based on LLM reasoning.
-        4. Created agents execute in background async tasks with thread isolation.
-        5. Results collected asynchronously from completed agents.
-        6. Supervisor synthesizes final response from agent results.
-        7. Response returned via ROS2 service callback.
+        4. Created agents queued in pending_agents_list via supervisor tools.
+        5. Supervisor's consume_pending_agents() executes agents in background threads.
+        6. Each agent runs with isolated asyncio event loop for non-blocking concurrency.
+        7. Results collected asynchronously from completed agents.
+        8. Supervisor synthesizes final response from agent results.
+        9. Response returned via ROS2 service callback.
 
     Thread Safety:
         Agent lists are protected by agent_lists_lock. Agent execution runs in
@@ -61,11 +59,7 @@ class HierarchicalMultiagent(LangGraphRosBase):
 
     Attributes:
         supervisor_manager (SupervisorManager): Manages supervisor agent and LangGraph workflow.
-        agent_lists_lock (threading.Lock): Mutex for concurrent access to agent lists.
-        pending_agents_list (list): Queue of agents created but not yet started.
-        running_agents_list (list): Agents currently executing their tasks.
         agent_srv (rclpy.node.Service): ROS2 service endpoint for receiving queries.
-        agent_timer (rclpy.node.TimerHandle): Timer for periodically consuming pending agents.
         spa_params (dict): Configuration passed to all SinglePurposeAgent instances.
         loop (asyncio.AbstractEventLoop): Main event loop for supervisor execution.
         max_steps (int): Maximum LangGraph steps for supervisor and agents.
@@ -86,7 +80,7 @@ class HierarchicalMultiagent(LangGraphRosBase):
         4. Retrieves tools available to supervisor from Ollama.
         5. Builds the supervisor's LangGraph workflow.
         6. Creates ROS2 service endpoint for receiving user queries.
-        7. Sets up timer for periodic agent consumption from queue.
+        7. Sets up timer for periodic delegation to supervisor's agent consumption.
 
         After successful initialization, the node is ready to receive user queries
         via ROS2 service and manage the hierarchical multi-agent execution.
@@ -143,107 +137,38 @@ class HierarchicalMultiagent(LangGraphRosBase):
         # Build the LangGraph workflow
         self.build_graph()
 
+        # Create the subscriber to listen for user queries
+        self.group = ReentrantCallbackGroup()
+        self.agent_srv = self.create_service(
+            srv_type=CallAgent,
+            srv_name=self.service_name,
+            callback=self.agent_callback,
+            callback_group=self.group
+        )
+
+        # Create timer to consume pending agents from the queue
+        # Uses ReentrantCallbackGroup to allow concurrent execution
+        self.agent_timer = self.create_timer(
+            1.0,  # Timer period in seconds
+            self._consume_pending_agents_timer_callback,
+            callback_group=self.group
+        )
+
         self.get_logger().info('Hierarchical Multiagent LangGraph Node has been started.')
 
-    def _agent_execution_timer_callback(self) -> None:
+    def _consume_pending_agents_timer_callback(self) -> None:
         """
-        Timer callback: consume pending agents from queue and execute in dedicated threads.
+        Timer callback: delegate agent consumption to supervisor.
 
-        Called periodically (every 1.0 second) by ROS2 timer. Implements producer-consumer
-        pattern: supervisor (producer) adds agents to pending_agents_list, this callback
-        (consumer) executes them. Each agent runs in its own thread with independent
-        asyncio event loop, preventing blocking of supervisor/ROS2 executor.
-
-        Execution Sequence:
-            1. Check pending_agents_list for queued agents (thread-safe with lock)
-            2. If agent pending: pop from queue
-            3. Create new asyncio.AbstractEventLoop for dedicated thread
-            4. Create task: loop.create_task(supervisor_manager.run_agent(...))
-            5. Wrap task in RunningAgentsState with loop reference
-            6. Add to running_agents_list (thread-safe with lock)
-            7. Block current thread: loop.run_until_complete(agent_task)
-            8. Wait for agent completion, handle cancellation
-
-        Thread Model:
-            - Callback runs in ROS2 executor's thread (MultiThreadedExecutor)
-            - Agent task (loop.run_until_complete) blocks callback thread temporarily
-            - Agent's asyncio operations don't block supervisor's main event loop
-            - Multiple agents can run concurrently in different timer callbacks
-
-        State Management:
-            - Reads: pending_agents_list (protected by agent_lists_lock)
-            - Writes: running_agents_list (protected by agent_lists_lock)
-            - Creates: RunningAgentsState with agent_id, input_prompt, task, loop
-            - Transitions: pending → running → finished (by supervisor_manager.run_agent)
-
-        Error Handling:
-            - Catches asyncio.CancelledError when agent is forcefully cancelled
-            - Logs cancellation status; cleanup handled by run_agent()
-            - Other exceptions propagate (ROS2 handles callback errors)
+        Called periodically (every 1.0 second) by ROS2 timer.
 
         Parameters:
-            None: Uses instance state (supervisor_manager.pending_agents_list, etc.)
+            None: Uses supervisor_manager instance.
 
         Returns:
             None
-
-        Side Effects:
-            - Modifies pending_agents_list (pops one agent per callback)
-            - Modifies running_agents_list (appends RunningAgentsState)
-            - Creates new asyncio event loop for dedicated thread
-            - Blocks callback thread during agent execution
-            - Logs timer execution and agent status
         """
-        # Try to get a pending agent from the list
-        agent_idle = None
-        self.supervisor_manager.agent_lists_lock.acquire()
-        if len(self.supervisor_manager.pending_agents_list) > 0:
-            agent_idle = self.supervisor_manager.pending_agents_list.pop(0)
-        self.supervisor_manager.agent_lists_lock.release()
-
-        if agent_idle is not None:
-
-            agent_id = agent_idle.agent.get_id()
-
-            # No existing loop, safe to create a new one
-            self.get_logger().info(
-                f'Timer: No event loop running. Creating new loop for agent '
-                f'{agent_id} in thread [{threading.current_thread().name}]')
-            # Create a new event loop for this thread
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-            # Schedule the agent execution coroutine in the new event loop
-            agent_task = loop.create_task(
-                self.supervisor_manager.run_agent(
-                    agent_idle.agent,
-                    agent_idle.input_state
-                ))
-
-            self.get_logger().info(
-                f'Starting execution of agent [{agent_id}] '
-                f'in thread [{threading.current_thread().name}]...')    
-            # Create running agent object with all required fields
-            running_agent = RunningAgentsState(
-                agent_id=agent_id,
-                input_prompt=agent_idle.input_state['messages'][0]['content'],
-                coroutine_handler=agent_task,
-                event_loop=loop
-            )
-
-            # Add to running agents list
-            self.supervisor_manager.agent_lists_lock.acquire()
-            self.supervisor_manager.running_agents_list.append(running_agent)
-            self.supervisor_manager.agent_lists_lock.release()
-
-            # Need to await the agent task to completion
-            try:
-                self.get_logger().info(
-                    f'Working on agent [{agent_id}]'
-                    f' in thread [{threading.current_thread().name}]...')
-                loop.run_until_complete(agent_task)
-            except asyncio.CancelledError:
-                self.get_logger().info(f'Agent {agent_id} execution was cancelled.')
+        self.supervisor_manager.consume_pending_agents()
 
     def build_graph(self) -> None:
         """
@@ -415,7 +340,6 @@ class HierarchicalMultiagent(LangGraphRosBase):
         self.get_logger().info('Query processing submitted; returning response to caller.')
         return response
 
-
     def get_spa_params(self) -> None:
         """
         Declare and retrieve ROS2 parameters for SinglePurposeAgent configuration.
@@ -491,7 +415,7 @@ class HierarchicalMultiagent(LangGraphRosBase):
             'spa_template_type').get_parameter_value().string_value
         self.get_logger().info(
             f'The parameter spa_template_type is set to: [{self.spa_params["template_type"]}]')
-        
+
         # Declare and retrieve model chat template file name parameter
         self.declare_parameter('spa_template_file', 'qwen3.jinja')
         self.spa_params['template_file'] = self.get_parameter(
