@@ -107,7 +107,7 @@ class HierarchicalMultiagent(LangGraphRosBase):
         # Uses ReentrantCallbackGroup to allow concurrent execution
         self.agent_timer = self.create_timer(
             1.0,  # Timer period in seconds
-            self._agent_execution_timer_callback,
+            self._consume_pending_agents_timer_callback,
             callback_group=self._timer_group
         )
 
@@ -118,7 +118,6 @@ class HierarchicalMultiagent(LangGraphRosBase):
             max_retries=5,
             retry_delay=2.0
         )
-
         # Initialize the Supervisor Manager
         self.supervisor_manager = SupervisorManager(
             logger=self.get_logger(),
@@ -136,23 +135,6 @@ class HierarchicalMultiagent(LangGraphRosBase):
 
         # Build the LangGraph workflow
         self.build_graph()
-
-        # Create the subscriber to listen for user queries
-        self.group = ReentrantCallbackGroup()
-        self.agent_srv = self.create_service(
-            srv_type=CallAgent,
-            srv_name=self.service_name,
-            callback=self.agent_callback,
-            callback_group=self.group
-        )
-
-        # Create timer to consume pending agents from the queue
-        # Uses ReentrantCallbackGroup to allow concurrent execution
-        self.agent_timer = self.create_timer(
-            1.0,  # Timer period in seconds
-            self._consume_pending_agents_timer_callback,
-            callback_group=self.group
-        )
 
         self.get_logger().info('Hierarchical Multiagent LangGraph Node has been started.')
 
