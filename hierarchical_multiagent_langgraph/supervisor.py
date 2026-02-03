@@ -366,14 +366,8 @@ class SupervisorManager(LangGraphBase):
             for _, running_agent in enumerate(supervisor.running_agents_list):
                 if running_agent.agent_id == agent_id:
                     query = running_agent.input_prompt
-                    # Use call_soon_threadsafe to cancel from another thread safely
-                    if running_agent.event_loop is not None:
-                        running_agent.event_loop.call_soon_threadsafe(
-                            running_agent.coroutine_handler.cancel
-                        )
-                    else:
-                        running_agent.coroutine_handler.cancel()
-                    # Stop agents running behavior and remove from list
+                    # FIRST: Stop the behavior tree via MCP client BEFORE cancelling the agent
+                    # This ensures the event loop is still running and can process the request
                     if supervisor.ollama_agent.mcp_client is not None:
                         try:
                             print("stopping behavior tree via MCP client...")
@@ -385,13 +379,20 @@ class SupervisorManager(LangGraphBase):
                                 ),
                                 running_agent.event_loop
                             )
-                            result = stop_future.result(timeout=5.0)
+                            result = stop_future.result(timeout=8.0)
                             print(f"behavior tree stopped successfully. Result: {result}")
                         except Exception as e:
                             supervisor._log_error(
                                 f'ERROR stopping behavior tree for AGENT [{agent_id}]: '
                                 f'{type(e).__name__}: {e}\n{traceback.format_exc()}'
                             )
+                    # THEN: Cancel the agent's coroutine AFTER stopping the behavior tree
+                    if running_agent.event_loop is not None:
+                        running_agent.event_loop.call_soon_threadsafe(
+                            running_agent.coroutine_handler.cancel
+                        )
+                    else:
+                        running_agent.coroutine_handler.cancel()
                     supervisor.running_agents_list.remove(running_agent)
                     # Create finished agent state with FAILURE due to cancellation
                     finished_state = FinishedAgentsState(
