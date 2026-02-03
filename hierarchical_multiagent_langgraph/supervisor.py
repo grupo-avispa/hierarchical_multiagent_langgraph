@@ -19,6 +19,7 @@ import threading
 from dataclasses import dataclass
 from threading import Lock
 from typing import TypedDict
+import traceback
 
 from hierarchical_multiagent_langgraph.agent import AgentStatus, SinglePurposeAgent
 from jinja2 import Template
@@ -375,13 +376,21 @@ class SupervisorManager(LangGraphBase):
                     # Stop agents running behavior and remove from list
                     if supervisor.ollama_agent.mcp_client is not None:
                         try:
-                            supervisor.ollama_agent.mcp_client.call_tool(
+                            print("stopping behavior tree via MCP client...")
+                            # Use run_coroutine_threadsafe since the event loop is already running
+                            stop_future = asyncio.run_coroutine_threadsafe(
+                                supervisor.ollama_agent.mcp_client.call_tool(
                                     "stop_behavior_tree",
-                                    arguments={"execution_id": agent_id}
-                                )
+                                    arguments={"execution_id": str(agent_id)}
+                                ),
+                                running_agent.event_loop
+                            )
+                            result = stop_future.result(timeout=5.0)
+                            print(f"behavior tree stopped successfully. Result: {result}")
                         except Exception as e:
                             supervisor._log_error(
-                                f'ERROR stopping behavior tree for AGENT [{agent_id}]: {e}'
+                                f'ERROR stopping behavior tree for AGENT [{agent_id}]: '
+                                f'{type(e).__name__}: {e}\n{traceback.format_exc()}'
                             )
                     supervisor.running_agents_list.remove(running_agent)
                     # Create finished agent state with FAILURE due to cancellation
