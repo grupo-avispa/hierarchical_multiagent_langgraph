@@ -33,6 +33,7 @@ Analyze the user's request and the current agents state.
 - You should only skip user's query when an existing agent is already handling the exact same task as the user's request.
 - In case of contradictory requests, prioritize the most recent user request.
 - If you have to use delete_agent tool, you MUST add the agent ID as argument. It is a numeric value.
+- If you the user ask for explanations about robot decisions and you have information about it, you should provide that information in a concise manner to the created agent.
 
 ## Examples
 ### Example 1 
