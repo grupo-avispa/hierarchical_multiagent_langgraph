@@ -434,6 +434,11 @@ class HierarchicalMultiagent(LangGraphRosBase):
         self.get_logger().info(
             f'The parameter spa_max_steps is set to: [{self.spa_params["max_steps"]}]')
 
+        self.declare_parameter('spa_enable_thinking', False)
+        self.spa_params['think'] = self.get_parameter(
+            'spa_enable_thinking').get_parameter_value().bool_value
+        self.get_logger().info(
+            f'The parameter spa_enable_thinking is set to: [{self.spa_params["think"]}]')
 
 def main(args=None) -> None:
     """

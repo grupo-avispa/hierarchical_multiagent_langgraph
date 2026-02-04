@@ -14,10 +14,12 @@ langgraph_agent_node:
     spa_template_file: "qwen3.jinja"
     
     # LLM model name (for Ollama)
-    spa_llm_model: "ministral-3:3b"
+    spa_llm_model: "qwen3:14b" 
     llm_model: "ministral-3:14b"
     
     # Tool call regex pattern to extract tool calls from LLM response
+    # \[TOOL_CALLS\](\w+)\[ARGS\](\{.*\})
+    # <tool_call>(.*?)</tool_call>
     spa_tool_call_pattern: "<tool_call>(.*?)</tool_call>"
     tool_call_pattern: "<tool_call>(.*?)</tool_call>"
 
@@ -33,12 +35,13 @@ langgraph_agent_node:
     raw_mode: False
     debug_mode: True
     enable_thinking: False
-    temperature: 0.05
+    spa_enable_thinking: True
+    temperature: 0.3
     repeat_penalty: 1.1
-    top_k: 35
-    top_p: 0.45
-    num_ctx: 16384
-    num_predict: 2048
+    top_k: 30
+    top_p: 0.5
+    num_ctx: 8192
+    num_predict: 1024
     
     # LangGraph workflow parameters
     spa_max_steps: 5
