@@ -116,7 +116,6 @@ class GetObjectRegionNode(Node):
             rate = self.create_rate(10.0)  # 10 Hz
             
             while time.time() - start_time < self.objects_timeout:
-                rclpy.spin_once(self, timeout_sec=0.1)
                 with self.objects_lock:
                     if self.objects is not None:
                         current_objects = self.objects
@@ -213,30 +212,15 @@ class GetObjectRegionNode(Node):
         
         # Send goal
         self.get_logger().info(f'Sending TTS goal: "{text}"')
-        send_goal_future = self._tts_action_client.send_goal_async(goal_msg)
+        send_goal_future = self._tts_action_client.send_goal(goal_msg)
         
-        # Wait for goal to be accepted
-        rclpy.spin_until_future_complete(self, send_goal_future, timeout_sec=timeout)
-        
-        goal_handle = send_goal_future.result()
-        if not goal_handle.accepted:
+        if send_goal_future is None:
             return {
                 'success': False,
-                'message': 'TTS goal was rejected by the server'
+                'message': 'TTS goal was failed'
             }
         
         self.get_logger().info('TTS goal accepted, waiting for result...')
-        
-        # Wait for result
-        result_future = goal_handle.get_result_async()
-        rclpy.spin_until_future_complete(self, result_future, timeout_sec=timeout)
-        
-        result = result_future.result()
-        if result is None:
-            return {
-                'success': False,
-                'message': 'TTS action timed out waiting for result'
-            }
         
         return {
             'success': True,
@@ -276,12 +260,10 @@ class GetObjectRegionNode(Node):
         
         # Call service
         self.get_logger().info(f'Calling RAG service with query: "{query}"')
-        future = self._rag_client.call_async(request)
+        future = self._rag_client.call(request)
+        print(future)
         
-        # Wait for response
-        rclpy.spin_until_future_complete(self, future, timeout_sec=timeout)
-        
-        if not future.done():
+        if future is None:
             return {
                 'success': False,
                 'status': 'timeout',
@@ -290,38 +272,26 @@ class GetObjectRegionNode(Node):
                 'documents': []
             }
         
-        try:
-            response = future.result()
-        except Exception as e:
-            return {
-                'success': False,
-                'status': 'error',
-                'message': f'RAG service call failed: {str(e)}',
-                'total_results': 0,
-                'documents': []
-            }
-        
         # Process response
         documents = []
-        for doc in response.results:
+        for doc in future.results:
             documents.append({
                 'content': doc.content,
-                'metadata': doc.metadata,
                 'score': doc.score if hasattr(doc, 'score') else 0.0
             })
         
         result = {
             'success': True,
-            'status': response.status,
-            'total_results': response.total_results,
+            'status': future.status,
+            'total_results': future.total_results,
             'documents': documents
         }
         
         # Add refinement if enabled and available
-        if enable_refinement and response.results:
-            result['refinement'] = response.results[0].content
+        if enable_refinement and future.results:
+            result['refinement'] = future.results[0].content
         
-        self.get_logger().info(f'RAG service returned {response.total_results} results')
+        self.get_logger().info(f'RAG service returned {future.total_results} results')
         return result
     
     def move_to_region(self, region_name: str, number_of_goals: int = 1, timeout: float = 60.0):
@@ -348,27 +318,16 @@ class GetObjectRegionNode(Node):
         goal_request.region_name = region_name
         goal_request.n = number_of_goals
         goal_request.yaw = 0.0
-        goal_request.orientation = 0  # INSIDE orientation
+        goal_request.orientation = 0.0  # INSIDE orientation
         goal_request.border = 0.0
         
         self.get_logger().info(f'Generating goals for region: {region_name}')
-        goal_future = self._generate_random_goals_client.call_async(goal_request)
+        goal_response = self._generate_random_goals_client.call(goal_request)
         
-        # Wait for goal generation
-        rclpy.spin_until_future_complete(self, goal_future, timeout_sec=10.0)
-        
-        if not goal_future.done():
+        if goal_response is None:
             return {
                 'success': False,
                 'message': 'Goal generation timed out'
-            }
-        
-        try:
-            goal_response = goal_future.result()
-        except Exception as e:
-            return {
-                'success': False,
-                'message': f'Goal generation failed: {str(e)}'
             }
         
         # Check if goals were generated
@@ -395,47 +354,21 @@ class GetObjectRegionNode(Node):
         nav_goal.behavior_tree = ''  # Use default behavior tree
         
         self.get_logger().info(f'Starting navigation to region: {region_name}')
-        send_goal_future = self._navigate_action_client.send_goal_async(nav_goal)
+        goal_result = self._navigate_action_client.send_goal(nav_goal)
         
-        # Wait for goal acceptance
-        rclpy.spin_until_future_complete(self, send_goal_future, timeout_sec=10.0)
-        
-        goal_handle = send_goal_future.result()
-        if not goal_handle.accepted:
+        if goal_result is None:
             return {
                 'success': False,
-                'message': 'Navigation goal was rejected',
+                'message': 'Navigation goal was rejected or robot was not able to navigate',
                 'goals_generated': goals_count
             }
         
-        self.get_logger().info('Navigation goal accepted, waiting for completion...')
         
-        # Wait for navigation result
-        result_future = goal_handle.get_result_async()
-        rclpy.spin_until_future_complete(self, result_future, timeout_sec=timeout)
-        
-        if not result_future.done():
-            # Cancel the goal if it times out
-            goal_handle.cancel_goal_async()
-            return {
-                'success': False,
-                'message': f'Navigation timed out after {timeout} seconds',
-                'goals_generated': goals_count
-            }
-        
-        result = result_future.result()
-        if result.status == 4:  # SUCCEEDED
-            return {
-                'success': True,
-                'message': f'Successfully navigated to region "{region_name}"',
-                'goals_generated': goals_count
-            }
-        else:
-            return {
-                'success': False,
-                'message': f'Navigation failed with status {result.status}',
-                'goals_generated': goals_count
-            }
+        return {
+            'success': True,
+            'message': f'Successfully navigated to region "{region_name}"',
+            'goals_generated': goals_count
+        }
     
     def charge_robot(self, dock_id: str = "wall_dock", dock_type: str = "scitos_dock", navigate_to_staging_pose: bool = True, timeout: float = 120.0):
         """
@@ -473,46 +406,27 @@ class GetObjectRegionNode(Node):
         dock_goal.max_staging_time = 1000.0  # Default max staging time
         
         self.get_logger().info(f'Starting docking operation (dock_id: {dock_id or "default"})')
-        send_goal_future = self._dock_action_client.send_goal_async(dock_goal)
+        result_goal = self._dock_action_client.send_goal(dock_goal)
         
-        # Wait for goal acceptance
-        rclpy.spin_until_future_complete(self, send_goal_future, timeout_sec=10.0)
-        
-        goal_handle = send_goal_future.result()
-        if not goal_handle.accepted:
+        if result_goal is None:
             return {
                 'success': False,
-                'message': 'Docking goal was rejected'
+                'message': 'Docking goal was rejected or robot was not able to dock'
             }
         
         self.get_logger().info('Docking goal accepted, waiting for completion...')
         
-        # Wait for docking result
-        result_future = goal_handle.get_result_async()
-        rclpy.spin_until_future_complete(self, result_future, timeout_sec=timeout)
-        
-        if not result_future.done():
-            # Cancel the goal if it times out
-            goal_handle.cancel_goal_async()
-            return {
-                'success': False,
-                'message': f'Docking timed out after {timeout} seconds'
-            }
-        
-        result = result_future.result()
-        
-        if result.status == 4:  # SUCCEEDED
+        if result_goal.success:
             return {
                 'success': True,
                 'message': 'Successfully docked to charging station',
-                'num_retries': result.result.num_retries
+                'num_retries': result_goal.num_retries
             }
         else:
             return {
                 'success': False,
-                'message': result.result.error_msg if result.result.error_msg else f'Docking failed with status {result.status}',
-                'error_code': result.result.error_code,
-                'num_retries': result.result.num_retries
+                'message': f'Docking failed: {result_goal.message}',
+                'num_retries': result_goal.num_retries
             }
 
 
@@ -531,7 +445,6 @@ def charge_robot(dock_id: str = "", navigate_to_staging_pose: bool = True) -> di
     Returns:
         dict with 'success', 'message', 'num_retries', and error information if applicable
     """
-    global ros_node
     
     if ros_node is None:
         return {
@@ -557,7 +470,6 @@ def move_to_region(region_name: str, number_of_goals: int = 1) -> dict:
     Returns:
         dict with 'success', 'message', and 'goals_generated' count
     """
-    global ros_node
     
     if ros_node is None:
         return {
@@ -584,7 +496,6 @@ def retrieve_documents(query: str, k: int = 3, enable_refinement: bool = False) 
     Returns:
         dict with 'success', 'status', 'total_results', 'documents' list, and optionally 'refinement'
     """
-    global ros_node
     
     if ros_node is None:
         return {
@@ -612,7 +523,6 @@ def say_text(text: str) -> dict:
     Returns:
         dict with 'success' (bool) and 'message' (str)
     """
-    global ros_node
     
     if ros_node is None:
         return {
@@ -638,7 +548,6 @@ def get_object_region(object_name: str) -> dict:
     Returns:
         dict with 'found' (bool), 'region' (str or None) and 'message' (str)
     """
-    global ros_node
     
     if ros_node is None:
         return {
@@ -709,7 +618,7 @@ async def get_weather(city: str) -> str:
         return json.dumps(tool_response, indent=2)
 
     except Exception as e:
-        await ctx.error(f'Error retrieving weather data: {e}')
+        # await ctx.error(f'Error retrieving weather data: {e}')
         error_response = {
             'status': 'error',
             'message': f'Error retrieving weather data: {e}',
@@ -719,7 +628,6 @@ async def get_weather(city: str) -> str:
       
 def ros_spin_thread():
     """Thread to execute ROS spin."""
-    global ros_node
     try:
         rclpy.spin(ros_node)
     except KeyboardInterrupt:
