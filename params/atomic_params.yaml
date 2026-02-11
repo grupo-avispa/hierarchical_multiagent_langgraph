@@ -1,0 +1,48 @@
+langgraph_agent_node:
+  ros__parameters:
+    # Server name
+    service_name: "agent_service"
+    
+    # MCP servers configuration file path
+    spa_mcp_servers: "spa_mcp.json"
+    mcp_servers: ""
+
+    # Model chat template file path
+    template_type: "qwen3"
+    template_file: "qwen3.jinja"
+    spa_template_type: "qwen3"
+    spa_template_file: "qwen3.jinja"
+    
+    # LLM model name (for Ollama)
+    spa_llm_model: "qwen3:14b" 
+    llm_model: "qwen3:14b"
+    
+    # Tool call regex pattern to extract tool calls from LLM response
+    # \[TOOL_CALLS\](\w+)\[ARGS\](\{.*\})
+    # <tool_call>(.*?)</tool_call>
+    spa_tool_call_pattern: "<tool_call>(.*?)</tool_call>"
+    tool_call_pattern: "<tool_call>(.*?)</tool_call>"
+
+    # Available tools for the supervisor and SPA agents
+    available_tools: [""]
+    spa_available_tools: ["charge_robot", "move_to_region", "call_rag", "say_text", "get_object_region", "get_weather"]
+
+    # System prompt template file path
+    spa_system_prompt_file: "agent_system_prompt.jinja"
+    system_prompt_file: "supervisor_system_prompt.jinja"
+    
+    # Ollama generation parameters
+    raw_mode: False
+    debug_mode: True
+    enable_thinking: False
+    spa_enable_thinking: False
+    temperature: 0.0
+    repeat_penalty: 1.1
+    top_k: 20
+    top_p: 0.2
+    num_ctx: 8192
+    num_predict: 1024
+    
+    # LangGraph workflow parameters
+    spa_max_steps: 5
+    max_steps: 5

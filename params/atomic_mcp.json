@@ -1,0 +1,5 @@
+{
+    "atomic-mcp": {
+        "url": "http://localhost:8988/mcp"
+    }
+}
