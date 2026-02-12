@@ -20,11 +20,14 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from rclpy.time import Time
 from rclpy.action import ActionClient
+from rclpy.executors import MultiThreadedExecutor
+from rclpy.callback_groups import ReentrantCallbackGroup
 from object_with_region.msg import ObjectRegion3DArray
 from audio_common_msgs.action import TTS
 from llm_interactions_msgs.srv import RetrieveDocuments
 from semantic_navigation_msgs.srv import GenerateRandomGoals
 from nav2_msgs.action import NavigateThroughPoses, DockRobot
+import asyncio
 import threading
 import time
 from fastmcp import FastMCP
@@ -57,6 +60,9 @@ class GetObjectRegionNode(Node):
         self.objects = None
         self.objects_lock = threading.Lock()
         
+        # Create reentrant callback group to allow concurrent callbacks
+        self._reentrant_cb_group = ReentrantCallbackGroup()
+        
         # Configure QoS for sensor data
         qos_profile = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
@@ -64,28 +70,42 @@ class GetObjectRegionNode(Node):
             depth=1
         )
         
-        # Create subscriber
+        # Create subscriber with reentrant callback group
         self.objects_sub = self.create_subscription(
             ObjectRegion3DArray,
             self.objects_topic,
             self.objects_callback,
-            qos_profile
+            qos_profile,
+            callback_group=self._reentrant_cb_group
         )
         
-        # Create TTS action client
-        self._tts_action_client = ActionClient(self, TTS, '/say')
+        # Create TTS action client with reentrant callback group
+        self._tts_action_client = ActionClient(
+            self, TTS, '/say',
+            callback_group=self._reentrant_cb_group
+        )
         
-        # Create RAG service client
-        self._rag_client = self.create_client(RetrieveDocuments, '/retrieve_documents')
+        # Create RAG service client with reentrant callback group
+        self._rag_client = self.create_client(
+            RetrieveDocuments, '/retrieve_documents',
+            callback_group=self._reentrant_cb_group
+        )
         
-        # Create navigation clients
+        # Create navigation clients with reentrant callback group
         self._generate_random_goals_client = self.create_client(
-            GenerateRandomGoals, '/generate_random_goals')
+            GenerateRandomGoals, '/generate_random_goals',
+            callback_group=self._reentrant_cb_group
+        )
         self._navigate_action_client = ActionClient(
-            self, NavigateThroughPoses, '/navigate_through_poses')
+            self, NavigateThroughPoses, '/navigate_through_poses',
+            callback_group=self._reentrant_cb_group
+        )
         
-        # Create docking action client
-        self._dock_action_client = ActionClient(self, DockRobot, '/dock_robot')
+        # Create docking action client with reentrant callback group
+        self._dock_action_client = ActionClient(
+            self, DockRobot, '/dock_robot',
+            callback_group=self._reentrant_cb_group
+        )
         
         self.get_logger().info(f'Subscribed to objects topic: {self.objects_topic}')
     
@@ -318,7 +338,7 @@ class GetObjectRegionNode(Node):
         goal_request.region_name = region_name
         goal_request.n = number_of_goals
         goal_request.yaw = 0.0
-        goal_request.orientation = 0.0  # INSIDE orientation
+        goal_request.orientation = 'inside'  # Options: 'outside', 'inside', 'random', 'requested'
         goal_request.border = 0.0
         
         self.get_logger().info(f'Generating goals for region: {region_name}')
@@ -329,15 +349,14 @@ class GetObjectRegionNode(Node):
                 'success': False,
                 'message': 'Goal generation timed out'
             }
-        
         # Check if goals were generated
-        if not goal_response.goals or len(goal_response.goals.poses) == 0:
+        if not goal_response.goals or len(goal_response.goals) == 0:
             return {
                 'success': False,
                 'message': f'No goals generated for region "{region_name}"'
             }
         
-        goals_count = len(goal_response.goals.poses)
+        goals_count = len(goal_response.goals)
         self.get_logger().info(f'Generated {goals_count} goals for region {region_name}')
         
         # Step 2: Navigate to the generated goals
@@ -350,20 +369,24 @@ class GetObjectRegionNode(Node):
         
         # Create navigation goal
         nav_goal = NavigateThroughPoses.Goal()
-        nav_goal.poses = goal_response.goals.poses
+        nav_goal.poses = goal_response.goals
         nav_goal.behavior_tree = ''  # Use default behavior tree
         
         self.get_logger().info(f'Starting navigation to region: {region_name}')
         goal_result = self._navigate_action_client.send_goal(nav_goal)
-        
+        print(goal_result)
         if goal_result is None:
             return {
                 'success': False,
                 'message': 'Navigation goal was rejected or robot was not able to navigate',
                 'goals_generated': goals_count
             }
-        
-        
+        if goal_result.result.error_code != 0:
+            return {
+                'success': False,
+                'message': 'An error occurred during navigation, aski for help and try again',
+                'goals_generated': goals_count
+            }
         return {
             'success': True,
             'message': f'Successfully navigated to region "{region_name}"',
@@ -434,7 +457,7 @@ class GetObjectRegionNode(Node):
     name = 'charge_robot',
     description = '''Docks the robot to a charging station for battery charging'''
 )
-def charge_robot(dock_id: str = "", navigate_to_staging_pose: bool = True) -> dict:
+async def charge_robot(dock_id: str = "", navigate_to_staging_pose: bool = True) -> dict:
     """
     Commands the robot to dock at a charging station.
     
@@ -452,14 +475,19 @@ def charge_robot(dock_id: str = "", navigate_to_staging_pose: bool = True) -> di
             'message': 'ROS node not initialized'
         }
     
-    return ros_node.charge_robot(dock_id=dock_id, navigate_to_staging_pose=navigate_to_staging_pose)
+    # Run ROS call in a separate thread to avoid blocking the event loop
+    return await asyncio.to_thread(
+        ros_node.charge_robot,
+        dock_id=dock_id,
+        navigate_to_staging_pose=navigate_to_staging_pose
+    )
 
 
 @mcp.tool(
     name = 'move_to_region',
     description = '''Navigates the robot to a specific named region in the environment'''
 )
-def move_to_region(region_name: str, number_of_goals: int = 1) -> dict:
+async def move_to_region(region_name: str, number_of_goals: int = 1) -> dict:
     """
     Moves the robot to a specific region by generating navigation goals and executing navigation.
     
@@ -477,14 +505,19 @@ def move_to_region(region_name: str, number_of_goals: int = 1) -> dict:
             'message': 'ROS node not initialized'
         }
     
-    return ros_node.move_to_region(region_name, number_of_goals=number_of_goals)
+    # Run ROS call in a separate thread to avoid blocking the event loop
+    return await asyncio.to_thread(
+        ros_node.move_to_region,
+        region_name,
+        number_of_goals=number_of_goals
+    )
 
 
 @mcp.tool(
     name = 'call_rag',
     description = '''Retrieves relevant documents from the RAG (Retrieval-Augmented Generation) system based on a search query'''
 )
-def retrieve_documents(query: str, k: int = 3, enable_refinement: bool = False) -> dict:
+async def retrieve_documents(query: str, k: int = 3, enable_refinement: bool = False) -> dict:
     """
     Searches for and retrieves relevant documents using the RAG system.
     
@@ -506,14 +539,20 @@ def retrieve_documents(query: str, k: int = 3, enable_refinement: bool = False) 
             'documents': []
         }
     
-    return ros_node.call_rag(query, k=k, enable_refinement=enable_refinement)
+    # Run ROS call in a separate thread to avoid blocking the event loop
+    return await asyncio.to_thread(
+        ros_node.call_rag,
+        query,
+        k=k,
+        enable_refinement=enable_refinement
+    )
 
 
 @mcp.tool(
     name = 'say_text',
     description = '''Speaks the given text using the robot's text-to-speech system'''
 )
-def say_text(text: str) -> dict:
+async def say_text(text: str) -> dict:
     """
     Speaks text using the robot's TTS action.
     
@@ -530,14 +569,15 @@ def say_text(text: str) -> dict:
             'message': 'ROS node not initialized'
         }
     
-    return ros_node.send_tts(text)
+    # Run ROS call in a separate thread to avoid blocking the event loop
+    return await asyncio.to_thread(ros_node.send_tts, text)
 
 
 @mcp.tool(
     name = 'get_object_region',
     description = '''Gets the region of an object detected by the vision system'''
 )
-def get_object_region(object_name: str) -> dict:
+async def get_object_region(object_name: str) -> dict:
     """
     Searches for an object by name in the array of detected objects
     from the vision system and returns the region where it is located.
@@ -556,7 +596,8 @@ def get_object_region(object_name: str) -> dict:
             'message': 'ROS node not initialized'
         }
     
-    return ros_node.find_object_region(object_name)
+    # Run ROS call in a separate thread to avoid blocking the event loop
+    return await asyncio.to_thread(ros_node.find_object_region, object_name)
 
 # ============= WEATHER =============
 @mcp.tool(
@@ -627,11 +668,15 @@ async def get_weather(city: str) -> str:
         return json.dumps(error_response, indent=2)
       
 def ros_spin_thread():
-    """Thread to execute ROS spin."""
+    """Thread to execute ROS spin with MultiThreadedExecutor."""
     try:
-        rclpy.spin(ros_node)
+        executor = MultiThreadedExecutor()
+        executor.add_node(ros_node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
+    finally:
+        executor.shutdown()
 
 
 def main(args=None):
