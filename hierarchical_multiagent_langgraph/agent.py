@@ -21,7 +21,6 @@ import json
 
 from fastmcp import Client
 from jinja2 import Template
-from langchain.tools import tool
 from langgraph.graph import START, StateGraph
 from langgraph_base_ros.chat_template_render import Messages
 from langgraph_base_ros.langgraph_base import LangGraphBase
