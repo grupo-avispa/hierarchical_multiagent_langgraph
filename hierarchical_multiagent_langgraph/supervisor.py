@@ -370,17 +370,19 @@ class SupervisorManager(LangGraphBase):
                     # This ensures the event loop is still running and can process the request
                     if supervisor.ollama_agent.mcp_client is not None:
                         try:
-                            print("stopping behavior tree via MCP client...")
+                            supervisor._log_info('Stopping behavior tree via MCP client...')
                             # Use run_coroutine_threadsafe since the event loop is already running
                             stop_future = asyncio.run_coroutine_threadsafe(
                                 supervisor.ollama_agent.mcp_client.call_tool(
-                                    "stop_behavior_tree",
-                                    arguments={"execution_id": str(agent_id)}
+                                    'stop_behavior_tree',
+                                    arguments={'execution_id': str(agent_id)}
                                 ),
                                 running_agent.event_loop
                             )
                             result = stop_future.result(timeout=8.0)
-                            print(f"behavior tree stopped successfully. Result: {result}")
+                            supervisor._log_info(
+                                f'Behavior tree stopped successfully. Result: {result}'
+                            )
                         except Exception as e:
                             supervisor._log_error(
                                 f'ERROR stopping behavior tree for AGENT [{agent_id}]: '

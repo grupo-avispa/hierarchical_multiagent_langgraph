@@ -242,7 +242,7 @@ class HierarchicalMultiagent(LangGraphRosBase):
             but this requires careful exception handling for background tasks.
         """
         config = {'configurable': {'thread_id': thread_id}}
-        result = self.loop.run_until_complete(
+        self.loop.run_until_complete(
             self.supervisor_manager.graph.ainvoke(input_state, config=config)
         )
         # print(f'Asynchronous processing result: {result}')
@@ -440,6 +440,7 @@ class HierarchicalMultiagent(LangGraphRosBase):
         self.get_logger().info(
             f'The parameter spa_enable_thinking is set to: [{self.spa_params["think"]}]')
 
+
 def main(args=None) -> None:
     """
     Entry point: initialize ROS2 and run hierarchical multi-agent node.
@@ -490,6 +491,7 @@ def main(args=None) -> None:
     Usage:
         $ ros2 run hierarchical_multiagent_langgraph supervisor
         # Node runs until Ctrl+C or external shutdown signal
+
     """
     rclpy.init(args=args)
 
