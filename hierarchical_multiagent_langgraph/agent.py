@@ -21,6 +21,7 @@ import json
 
 from fastmcp import Client
 from jinja2 import Template
+from langchain.tools import tool
 from langgraph.graph import START, StateGraph
 from langgraph_base_ros.chat_template_render import Messages
 from langgraph_base_ros.langgraph_base import LangGraphBase
@@ -460,3 +461,21 @@ class SinglePurposeAgent(LangGraphBase):
 
         # Compile the graph workflow
         self.graph = workflow.compile()
+    
+    # ========== LANGGRAPH TOOLS ==========
+    
+    # If needed, can add more tools here that the agent can call during its reasoning process.
+    # both lang style and MCP-based tools are supported. if needed define langchain tools as the following example.
+    # @staticmethod
+    # @tool('your_tool_name',
+    #       description='Description of what the tool does and when to use it.',
+    #       args_schema={
+    #           your_arg_schema_here: 'Description of the argument and its expected format.',
+    #       })
+    # def your_tool_name(your_arg_schema_here: str) -> str:
+    #     """
+    #     Docstring for your tool function.
+    #     """
+    #     # Implement the logic for your tool here
+    #     result = f'Processed argument: {your_arg_schema_here}'
+    #     return result
