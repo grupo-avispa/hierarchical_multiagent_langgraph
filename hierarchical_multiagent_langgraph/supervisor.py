@@ -156,32 +156,74 @@ class SupervisorManager(LangGraphBase):
 
     def _create_supervisor_tools(self) -> list:
         """
-        Create supervisor tools as closures with access to supervisor state.
+        Assemble supervisor tools for LLM-driven agent lifecycle management.
 
-        Dynamically creates three LLM tools (create_agent, delete_agent, skip_agent)
-        that the supervisor agent can invoke for lifecycle management. Uses closure
-        pattern to capture `self` reference, allowing tools to access and modify
-        supervisor state like agent lists and counters.
+        Delegates to individual ``_build_*_tool()`` methods, then returns them
+        in the dictionary format expected by the Ollama tool-calling API.
 
-        The tools are returned in Ollama's expected format with:
-        - Tool name and description
-        - JSON schema for input parameters
-        - Callable function object
-
-        Tool Lifecycle:
-            1. create_agent: Instantiates new SinglePurposeAgent, adds to pending queue
-            2. delete_agent: Cancels running agent gracefully via call_soon_threadsafe
-            3. skip_agent: No-op action for supervisor iterations without agent changes
-
-        Returns:
-            list: List of tool dictionaries with keys: 'name', 'description',
-                'inputSchema', 'tool_object'. Format required by Ollama LLM.
-
-        Note:
-            Tools use agent_lists_lock for thread-safe access to agent lists
-            to prevent race conditions between supervisor and agent threads.
+        Returns
+        -------
+        list
+            Tool dictionaries with keys ``name``, ``description``,
+            ``inputSchema``, and ``tool_object``.
         """
-        # Capture self in closure
+        create_agent_fn = self._build_create_agent_tool()
+        delete_agent_fn = self._build_delete_agent_tool()
+        skip_agent_fn = self._build_skip_agent_tool()
+
+        return [
+            {
+                'name': 'create_agent',
+                'description': 'Creates a new agent to handle a specific task.',
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {
+                        'query': {
+                            'type': 'string',
+                            'description': 'The task description for the new agent.'
+                        }
+                    },
+                    'required': ['query']
+                },
+                'tool_object': create_agent_fn
+            },
+            {
+                'name': 'delete_agent',
+                'description': 'Deletes an existing agent by its ID.',
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {
+                        'agent_id': {
+                            'type': 'integer',
+                            'description': 'The ID of the agent to delete.'
+                        }
+                    },
+                    'required': ['agent_id']
+                },
+                'tool_object': delete_agent_fn
+            },
+            {
+                'name': 'skip_agent',
+                'description': 'Skip agent management for this iteration.',
+                'inputSchema': {
+                    'type': 'object',
+                    'properties': {},
+                    'required': []
+                },
+                'tool_object': skip_agent_fn
+            }
+        ]
+
+    def _build_create_agent_tool(self):
+        """
+        Build the ``create_agent`` LangChain tool closure.
+
+        Returns
+        -------
+        StructuredTool
+            A ``@tool``-decorated callable that creates and enqueues a new
+            ``SinglePurposeAgent``.
+        """
         supervisor = self
 
         @tool(
@@ -189,32 +231,17 @@ class SupervisorManager(LangGraphBase):
             description='Creates a new agent to handle a specific task.'
         )
         def create_agent(query: str) -> str:
-            """
-            Create and queue a new SinglePurposeAgent for task execution.
+            """Create and queue a new SinglePurposeAgent for task execution.
 
-            Instantiates a new agent with configuration from spa_params, assigns
-            a unique ID, and adds it to the pending_agents_list for asynchronous
-            execution. Uses producer-consumer pattern: supervisor produces agents,
-            timer callback consumes and executes them in background threads.
+            Parameters
+            ----------
+            query : str
+                Task description / prompt for the new agent.
 
-            Agent Initialization:
-                - Creates independent Ollama instance for the agent
-                - Sets max_steps, system_prompt, and MCP config from spa_params
-                - Initializes status to RUNNING
-                - Generates unique auto-incremented agent ID
-
-            Threading Model:
-                - Runs synchronously in supervisor's event loop
-                - Agent execution deferred to timer callback's thread
-                - Uses agent_lists_lock for thread-safe queue insertion
-
-            Parameters:
-                query (str): Task description/prompt for the new agent.
-                    Passed as initial message content.
-
-            Returns:
-                str: Confirmation message with assigned agent ID and task summary.
-                    Format: "Agent {id} created successfully for task: {query}"
+            Returns
+            -------
+            str
+                Confirmation message with the assigned agent ID.
             """
             agent_id = supervisor.registry.next_id()
             query = f'Your assigned agent ID is {agent_id}. And your task is: {query}'
@@ -250,7 +277,6 @@ class SupervisorManager(LangGraphBase):
             new_agent.set_id(agent_id)
 
             # Add agent task to pending queue (producer-consumer pattern)
-            # The timer callback will consume and execute agents in their own threads
             agent_task = AgentTask(agent=new_agent, input_state=initial_state)
             supervisor.registry.enqueue(agent_task)
             supervisor._log_info(
@@ -258,40 +284,39 @@ class SupervisorManager(LangGraphBase):
 
             return f'Agent {agent_id} created successfully for task: {query}'
 
+        return create_agent
+
+    def _build_delete_agent_tool(self):
+        """
+        Build the ``delete_agent`` LangChain tool closure.
+
+        Returns
+        -------
+        StructuredTool
+            A ``@tool``-decorated callable that cancels and removes a running
+            agent by its ID.
+        """
+        supervisor = self
+
         @tool(
             'delete_agent',
             description='Deletes an existing agent by its ID.'
         )
         def delete_agent(agent_id: int) -> str:
-            """
-            Terminate and remove a running agent by its ID.
+            """Terminate and remove a running agent by its ID.
 
-            Searches running_agents_list for the specified agent, cancels its
-            execution gracefully using call_soon_threadsafe (for cross-thread safety),
-            and removes it from the list. If agent not found, returns error message.
+            Three-phase approach to avoid holding the registry lock during
+            potentially slow network I/O (MCP ``stop_behavior_tree``).
 
-            Cancellation Strategy:
-                - Uses asyncio's call_soon_threadsafe to safely cancel from supervisor thread
-                - Handles both event_loop-aware and direct cancellation
-                - Agent's asyncio.CancelledError handler stores final result before cleanup
+            Parameters
+            ----------
+            agent_id : int
+                Unique identifier of the agent to terminate.
 
-            Thread Safety:
-                - Acquires agent_lists_lock before list access
-                - Cancellation is thread-safe across event loop boundaries
-                - Running agent already removed from list before response
-
-            Parameters:
-                agent_id (int): Unique identifier of agent to terminate.
-
-            Returns:
-                str: Status message. Either:
-                    - Success: "Agent {id} deleted successfully (was working on: {task})"
-                    - Failure: "Error: Agent {id} not found in running agents"
-
-            Side Effects:
-                - Modifies running_agents_list (agent removed)
-                - Cancels agent's coroutine in its event loop
-                - Logs deletion action
+            Returns
+            -------
+            str
+                Status message indicating success or failure.
             """
             # Phase 1: Find the target agent (thread-safe lookup)
             target = supervisor.registry.find_running(agent_id)
@@ -304,12 +329,10 @@ class SupervisorManager(LangGraphBase):
             query = target.input_prompt
 
             # Phase 2: Perform network I/O WITHOUT holding the lock
-            # Stop the behavior tree via MCP client BEFORE cancelling
             if supervisor.ollama_agent.mcp_client is not None:
                 try:
                     supervisor._log_info(
                         'Stopping behavior tree via MCP client...')
-                    # Use run_coroutine_threadsafe since the loop is running
                     stop_future = asyncio.run_coroutine_threadsafe(
                         supervisor.ollama_agent.mcp_client.call_tool(
                             'stop_behavior_tree',
@@ -352,73 +375,35 @@ class SupervisorManager(LangGraphBase):
             supervisor._log_info(message)
             return message
 
+        return delete_agent
+
+    def _build_skip_agent_tool(self):
+        """
+        Build the ``skip_agent`` LangChain tool closure.
+
+        Returns
+        -------
+        StructuredTool
+            A ``@tool``-decorated callable that performs no agent action.
+        """
+        supervisor = self
+
         @tool(
             'skip_agent',
             description='Skip agent management for this iteration.'
         )
         def skip_agent() -> str:
-            """
-            No-op tool: skip agent lifecycle management for current iteration.
+            """No-op tool: skip agent lifecycle management for current iteration.
 
-            Allows supervisor to acknowledge a workflow iteration without creating
-            or modifying agents. Useful when supervisor decides task can be handled
-            by existing agents or no new agents are needed at this time.
-
-            Use Cases:
-                - Monitoring phase: existing agents sufficient for task
-                - Error recovery: wait before creating new agents
-                - Resource constraints: defer agent creation to next iteration
-                - Supervisor reasoning: task analysis requires no action
-
-            Returns:
-                str: Confirmation message indicating no action was taken.
+            Returns
+            -------
+            str
+                Confirmation message indicating no action was taken.
             """
             supervisor._log_info('Skipping agent action')
             return 'No agent action needed for this request'
 
-        # Return tools in the format expected by Ollama
-        return [
-            {
-                'name': 'create_agent',
-                'description': 'Creates a new agent to handle a specific task.',
-                'inputSchema': {
-                    'type': 'object',
-                    'properties': {
-                        'query': {
-                            'type': 'string',
-                            'description': 'The task description for the new agent.'
-                        }
-                    },
-                    'required': ['query']
-                },
-                'tool_object': create_agent
-            },
-            {
-                'name': 'delete_agent',
-                'description': 'Deletes an existing agent by its ID.',
-                'inputSchema': {
-                    'type': 'object',
-                    'properties': {
-                        'agent_id': {
-                            'type': 'integer',
-                            'description': 'The ID of the agent to delete.'
-                        }
-                    },
-                    'required': ['agent_id']
-                },
-                'tool_object': delete_agent
-            },
-            {
-                'name': 'skip_agent',
-                'description': 'Skip agent management for this iteration.',
-                'inputSchema': {
-                    'type': 'object',
-                    'properties': {},
-                    'required': []
-                },
-                'tool_object': skip_agent
-            }
-        ]
+        return skip_agent
 
     # ========== LANGGRAPH NODES ==========
 
