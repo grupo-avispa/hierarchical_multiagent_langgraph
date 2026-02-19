@@ -1,0 +1,227 @@
+"""
+Agent executor module for managing async execution of single-purpose agents.
+
+This module provides the AgentExecutor class, which handles the complete
+execution pipeline for SinglePurposeAgent instances: setup, tool retrieval,
+graph building, task execution, and result collection. Each agent runs in
+its own asyncio event loop within a dedicated thread.
+
+Key components:
+    - AgentExecutor: Manages async execution lifecycle for agents.
+"""
+
+import asyncio
+import logging
+import threading
+
+from hierarchical_multiagent_langgraph.agent import AgentStatus, SinglePurposeAgent
+from hierarchical_multiagent_langgraph.agent_registry import (
+    AgentRegistry,
+    FinishedAgentsState,
+    RunningAgentsState,
+)
+from langgraph_base_ros.chat_template_render import Messages
+
+
+class AgentExecutor:
+    """
+    Manage async execution of SinglePurposeAgent instances in dedicated threads.
+
+    Handles the complete agent execution pipeline from setup through result
+    collection. Uses the AgentRegistry for thread-safe agent state tracking
+    and supports configurable timeouts to prevent infinite execution.
+
+    Attributes
+    ----------
+    registry : AgentRegistry
+        Thread-safe registry for agent lifecycle state management.
+    agent_timeout : float
+        Maximum time in seconds for a single agent execution.
+    logger : logging.Logger | None
+        Optional logger instance for debug/info/warning output.
+    """
+
+    def __init__(
+        self,
+        registry: AgentRegistry,
+        agent_timeout: float = 120.0,
+        logger=None,
+    ) -> None:
+        """
+        Initialize the AgentExecutor.
+
+        Parameters
+        ----------
+        registry : AgentRegistry
+            Thread-safe registry for tracking agent lifecycle states.
+        agent_timeout : float
+            Maximum time in seconds for a single agent execution
+            before it is forcefully terminated. Defaults to 120.0.
+        logger : logging.Logger | None
+            Optional logger for debug/info/warning output. If None,
+            uses Python's standard logging module. Defaults to None.
+        """
+        self.registry = registry
+        self.agent_timeout = agent_timeout
+        self.logger = logger
+
+    def _log_info(self, msg: str) -> None:
+        """Log info message using provided logger or Python logging."""
+        if self.logger is not None:
+            self.logger.info(msg)
+        else:
+            logging.info(msg)
+
+    def _log_error(self, msg: str) -> None:
+        """Log error message using provided logger or Python logging."""
+        if self.logger is not None:
+            self.logger.error(msg)
+        else:
+            logging.error(msg)
+
+    async def run_agent(
+        self,
+        agent: SinglePurposeAgent,
+        initial_state: Messages,
+    ) -> None:
+        """
+        Execute a SinglePurposeAgent's LangGraph workflow asynchronously.
+
+        Run a complete agent execution pipeline: setup, tool retrieval,
+        graph build, task execution, and result collection. Handle all error
+        cases gracefully, storing final results (success/failure) in the
+        registry's finished list.
+
+        Parameters
+        ----------
+        agent : SinglePurposeAgent
+            Agent instance with configured LLM and tools.
+        initial_state : Messages
+            Initial message state with user prompt/task.
+
+        Raises
+        ------
+        asyncio.CancelledError
+            If the supervisor calls delete_agent during execution. Caught
+            internally; result stored before re-raising for cleanup.
+        """
+        agent_id = agent.get_id()
+        execution_result = FinishedAgentsState(
+            agent_id=agent_id,
+            input_prompt=initial_state['messages'][0]['content'],
+            agent_result='Execution failed.',
+            status=AgentStatus.FAILURE,
+        )
+
+        # Setup phase: MCP client verification and tool retrieval.
+        # Failures are logged but do not prevent execution.
+        try:
+            self._log_info(f'AGENT [{agent_id}]: Starting execution pipeline...')
+            if agent.ollama_agent.mcp_client is not None:  # type: ignore[union-attr]
+                async with agent.ollama_agent.mcp_client as client:  # type: ignore[union-attr]
+                    await client.ping()
+                self._log_info(f'AGENT [{agent_id}]: MCP client connection verified')
+
+            self._log_info(f'AGENT [{agent_id}]: Retrieving tools...')
+            await agent.ollama_agent.retrieve_tools(  # type: ignore[union-attr]
+                agent.lang_tools
+            )
+        except Exception as e:
+            self._log_error(f'ERROR in AGENT [{agent_id}] during setup: {e}')
+
+        # Execution phase: build graph and invoke the task
+        try:
+            if agent.graph is None:
+                self._log_info(f'AGENT [{agent_id}]: Building graph...')
+                await agent.make_graph()
+
+            self._log_info(f'AGENT [{agent_id}]: Executing task...')
+            result = await asyncio.wait_for(
+                agent.graph.ainvoke(initial_state),  # type: ignore[attr-defined]
+                timeout=self.agent_timeout,
+            )
+            execution_result.agent_result = result['messages'][-1]['content']
+
+            final_status = agent.get_status()
+            execution_result.status = final_status
+            self._log_info(
+                f'AGENT [{agent_id}]: Task completed with status: {final_status}'
+            )
+        except asyncio.CancelledError:
+            self._log_error(
+                f'AGENT [{agent_id}]: Execution cancelled by supervisor.'
+            )
+            raise
+        except asyncio.TimeoutError:
+            self._log_error(
+                f'AGENT [{agent_id}]: Execution timed out after '
+                f'{self.agent_timeout}s.'
+            )
+            agent.set_status(AgentStatus.FAILURE)
+            execution_result.agent_result = (
+                f'Agent execution timed out after {self.agent_timeout} seconds.'
+            )
+            execution_result.status = AgentStatus.FAILURE
+        except Exception as e:
+            self._log_error(f'ERROR in AGENT {agent_id}: {e}')
+            agent.set_status(AgentStatus.FAILURE)
+            execution_result.status = AgentStatus.FAILURE
+
+        # Store execution result in the registry
+        self.registry.move_to_finished(agent_id, execution_result)
+
+    def consume_pending_agents(self) -> None:
+        """
+        Consume one pending agent from the queue and execute in a dedicated thread.
+
+        Implement a producer-consumer pattern: the supervisor (producer) adds
+        agents to the registry's pending queue, and this method (consumer) pops
+        one agent per call and executes it. Each agent runs in its own asyncio
+        event loop within the calling thread.
+
+        Called periodically by a ROS2 timer callback.
+
+        Side Effects
+        ------------
+        - Pops one agent from the pending queue.
+        - Creates a new asyncio event loop for the agent.
+        - Registers the agent as running in the registry.
+        - Blocks the calling thread until agent execution completes.
+        """
+        agent_idle = self.registry.pop_pending()
+        if agent_idle is None:
+            return
+
+        agent_id = agent_idle.agent.get_id()
+        self._log_info(
+            f'Starting execution of agent {agent_id} in thread '
+            f'[{threading.current_thread().name}]'
+        )
+
+        # Create a new event loop for this thread
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        # Schedule the agent execution coroutine
+        agent_task = loop.create_task(
+            self.run_agent(agent_idle.agent, agent_idle.input_state)
+        )
+
+        # Register as running in the registry
+        running_agent = RunningAgentsState(
+            agent_id=agent_id,
+            input_prompt=agent_idle.input_state['messages'][0]['content'],
+            coroutine_handler=agent_task,
+            event_loop=loop,
+        )
+        self.registry.add_running(running_agent)
+
+        # Block until the agent task completes
+        try:
+            self._log_info(
+                f'Working on agent [{agent_id}]'
+                f' in thread [{threading.current_thread().name}]...'
+            )
+            loop.run_until_complete(agent_task)
+        except asyncio.CancelledError:
+            self._log_info(f'Agent {agent_id} execution was cancelled.')

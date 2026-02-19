@@ -13,16 +13,15 @@ Key components:
 """
 
 import asyncio
-import threading
 from typing import TypedDict
 import traceback
 
 from hierarchical_multiagent_langgraph.agent import AgentStatus, SinglePurposeAgent
+from hierarchical_multiagent_langgraph.agent_executor import AgentExecutor
 from hierarchical_multiagent_langgraph.agent_registry import (
     AgentRegistry,
     AgentTask,
     FinishedAgentsState,
-    RunningAgentsState,
 )
 from jinja2 import Template
 from langchain_core.tools import tool
@@ -132,6 +131,12 @@ class SupervisorManager(LangGraphBase):
         self.registry = AgentRegistry()
         # Maximum time in seconds for a single agent execution
         self.agent_timeout = agent_timeout
+        # Agent executor for running agents in background threads
+        self.executor = AgentExecutor(
+            registry=self.registry,
+            agent_timeout=self.agent_timeout,
+            logger=self.logger,
+        )
         # Load system prompt to attribute sys_prompt
         self._get_system_prompt(system_prompt_path)
         # Create tools with access to self
@@ -404,216 +409,6 @@ class SupervisorManager(LangGraphBase):
                 'tool_object': skip_agent
             }
         ]
-
-    async def run_agent(
-        self,
-        agent: SinglePurposeAgent,
-        initial_state: Messages
-    ) -> None:
-        """
-        Execute a SinglePurposeAgent's LangGraph workflow asynchronously in background.
-
-        Runs a complete agent execution pipeline: setup → tool retrieval → graph build →
-        task execution → result collection. Handles all error cases gracefully, storing
-        final results (success/failure) in finished_agents_list. Called by timer callback
-        in dedicated thread context.
-
-        Execution Pipeline:
-            1. Setup Phase: Initialize MCP client if configured, verify connectivity
-            2. Tool Setup: Retrieve tools available to agent from Ollama
-            3. Graph Building: Construct agent's LangGraph workflow (once per agent)
-            4. Execution: Run graph.ainvoke with initial state until completion
-            5. Result Storage: Move from running→finished list with status/output
-            6. Cleanup: Remove from running_agents_list, protect with agent_lists_lock
-
-        State Transitions:
-            - Created (pending) → Running (by timer) → Success/Failure (finished)
-            - Cancellation: Running → Failure (CancelledError caught)
-            - Exception: Running → Failure (any other exception)
-
-        Setup Robustness:
-            - MCP client failures logged but don't prevent execution
-            - Tool retrieval optional; agent continues without unavailable tools
-            - Allows graceful degradation if MCP servers unavailable
-
-        Thread Safety:
-            - Updates running_agents_list with agent_lists_lock protection
-            - Updates finished_agents_list with agent_lists_lock protection
-            - Safe to call from timer callback's thread context
-            - Handles cross-thread cancellation via event_loop.call_soon_threadsafe()
-
-        Parameters:
-            agent (SinglePurposeAgent): Agent instance with configured LLM and tools.
-            initial_state (Messages): Initial message state with user prompt/task.
-                Format: {'messages': [Message(role='user', content='...')]}
-
-        Returns:
-            Messages: Final state from agent's graph execution (typically last message).
-
-        Raises:
-            asyncio.CancelledError: If supervisor calls delete_agent during execution.
-                Caught internally; result stored before re-raising for cleanup.
-            Exception: Other exceptions logged but caught; agent marked FAILURE.
-
-        Side Effects:
-            - Modifies agent status: RUNNING → SUCCESS/FAILURE
-            - Moves agent from running_agents_list → finished_agents_list
-            - Creates and executes agent's LangGraph (one-time per agent)
-            - Logs detailed execution pipeline status
-            - May initialize MCP client and retrieve tools
-        """
-        agent_id = agent.get_id()
-        execution_result = FinishedAgentsState(
-            agent_id=agent_id,
-            input_prompt=initial_state['messages'][0]['content'],
-            agent_result='Execution failed.',
-            status=AgentStatus.FAILURE
-        )
-        # Try to setup the agent before execution.
-        # If MCP client connection or tool retrieval fails,
-        # we catch the exception and continue the agent execution without those features.
-        try:
-            self._log_info(f'AGENT [{agent_id}]: Starting execution pipeline...')
-            # Ping MCP server to verify connection (already connected in create_agent)
-            if agent.ollama_agent.mcp_client is not None:  # type: ignore[union-attr]
-                async with agent.ollama_agent.mcp_client as client:  # type: ignore[union-attr]
-                    await client.ping()
-                self._log_info(f'AGENT [{agent_id}]: MCP client connection verified')
-
-            # Ensure tools are registered before building the graph
-            self._log_info(f'AGENT [{agent_id}]: Retrieving tools...')
-            await agent.ollama_agent.retrieve_tools(agent.lang_tools)  # type: ignore[union-attr]
-
-        except Exception as e:
-            self._log_error(f'ERROR in AGENT [{agent_id}] during setup: {e}')
-
-        # Execute the agent's graph and invoke its tasks
-        try:
-            # Build the agent's graph if not already built
-            if agent.graph is None:
-                self._log_info(f'AGENT [{agent_id}]: Building graph...')
-                await agent.make_graph()
-
-            # Run the agent's graph with timeout protection
-            self._log_info(f'AGENT [{agent_id}]: Executing task...')
-            result = await asyncio.wait_for(
-                agent.graph.ainvoke(initial_state),  # type: ignore[attr-defined]
-                timeout=self.agent_timeout
-            )
-            execution_result.agent_result = result['messages'][-1]['content']
-
-            # Update agent status based on execution result
-            final_status = agent.get_status()
-            execution_result.status = final_status
-            self._log_info(
-                f'AGENT [{agent_id}]: Task completed with status: {final_status}')
-
-        except asyncio.CancelledError:
-            self._log_error(f'AGENT [{agent_id}]: Execution cancelled by supervisor.')
-            raise
-        except asyncio.TimeoutError:
-            self._log_error(
-                f'AGENT [{agent_id}]: Execution timed out after '
-                f'{self.agent_timeout}s.')
-            agent.set_status(AgentStatus.FAILURE)
-            execution_result.agent_result = (
-                f'Agent execution timed out after {self.agent_timeout} seconds.'
-            )
-            execution_result.status = AgentStatus.FAILURE
-        except Exception as e:
-            self._log_error(f'ERROR in AGENT {agent_id}: {e}')
-            agent.set_status(AgentStatus.FAILURE)
-            execution_result.status = AgentStatus.FAILURE
-
-        # Store the execution result in the registry
-        self.registry.move_to_finished(agent_id, execution_result)
-
-    def consume_pending_agents(self) -> None:
-        """
-        Consume pending agents from queue and execute in dedicated threads.
-
-        Called periodically by a timer in main node. Implements producer-consumer
-        pattern: supervisor (producer) adds agents to pending_agents_list, this method
-        (consumer) executes them. Each agent runs in its own thread with independent
-        asyncio event loop, preventing blocking of supervisor executor.
-
-        Execution Sequence:
-            1. Check pending_agents_list for queued agents (thread-safe with lock)
-            2. If agent pending: pop from queue
-            3. Create new asyncio.AbstractEventLoop for dedicated thread
-            4. Create task: loop.create_task(self.run_agent(...))
-            5. Wrap task in RunningAgentsState with loop reference
-            6. Add to running_agents_list (thread-safe with lock)
-            7. Block current thread: loop.run_until_complete(agent_task)
-            8. Wait for agent completion, handle cancellation
-
-        Thread Model:
-            - Callback runs in supervisor executor's thread (MultiThreadedExecutor)
-            - Agent task (loop.run_until_complete) blocks callback thread temporarily
-            - Agent's asyncio operations don't block supervisor's main event loop
-            - Multiple agents can run concurrently in different timer callbacks
-
-        State Management:
-            - Reads: pending_agents_list (protected by agent_lists_lock)
-            - Writes: running_agents_list (protected by agent_lists_lock)
-            - Creates: RunningAgentsState with agent_id, input_prompt, task, loop
-            - Transitions: pending → running → finished (by run_agent)
-
-        Error Handling:
-            - Catches asyncio.CancelledError when agent is forcefully cancelled
-            - Logs cancellation status; cleanup handled by run_agent()
-
-        Parameters:
-            None: Uses instance state (pending_agents_list, running_agents_list, etc.)
-
-        Returns:
-            None
-
-        Side Effects:
-            - Modifies pending_agents_list (pops one agent per call)
-            - Modifies running_agents_list (appends RunningAgentsState)
-            - Creates new asyncio event loop for dedicated thread
-            - Blocks calling thread during agent execution
-            - Logs agent status via logger
-        """
-        # Try to get a pending agent from the registry
-        agent_idle = self.registry.pop_pending()
-
-        if agent_idle is not None:
-            agent_id = agent_idle.agent.get_id()
-            self._log_info(
-                f'Starting execution of agent {agent_id} in thread '
-                f'[{threading.current_thread().name}]')
-            # Create a new event loop for this thread
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-
-            # Schedule the agent execution coroutine in the new event loop
-            agent_task = loop.create_task(
-                self.run_agent(
-                    agent_idle.agent,
-                    agent_idle.input_state
-                ))
-
-            # Create running agent object with all required fields
-            running_agent = RunningAgentsState(
-                agent_id=agent_id,
-                input_prompt=agent_idle.input_state['messages'][0]['content'],
-                coroutine_handler=agent_task,
-                event_loop=loop
-            )
-
-            # Add to running agents list in registry
-            self.registry.add_running(running_agent)
-
-            # Need to await the agent task to completion
-            try:
-                self._log_info(
-                    f'Working on agent [{agent_id}]'
-                    f' in thread [{threading.current_thread().name}]...')
-                loop.run_until_complete(agent_task)
-            except asyncio.CancelledError:
-                self._log_info(f'Agent {agent_id} execution was cancelled.')
 
     # ========== LANGGRAPH NODES ==========
 

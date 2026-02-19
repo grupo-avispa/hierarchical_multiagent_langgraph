@@ -141,17 +141,11 @@ class HierarchicalMultiagent(LangGraphRosBase):
 
     def _consume_pending_agents_timer_callback(self) -> None:
         """
-        Timer callback: delegate agent consumption to supervisor.
+        Timer callback: delegate agent consumption to executor.
 
         Called periodically (every 1.0 second) by ROS2 timer.
-
-        Parameters:
-            None: Uses supervisor_manager instance.
-
-        Returns:
-            None
         """
-        self.supervisor_manager.consume_pending_agents()
+        self.supervisor_manager.executor.consume_pending_agents()
 
     def build_graph(self) -> None:
         """
