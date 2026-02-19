@@ -3,9 +3,11 @@
 <package format="3">
   <name>hierarchical_multiagent_langgraph</name>
   <version>0.0.0</version>
-  <description>TODO: Package description</description>
+  <description>Hierarchical multi-agent system where a Supervisor coordinates multiple Single-Purpose Agents (SPAs) to execute complex tasks.</description>
   <maintainer email="ajtudela@gmail.com">Alberto Tudela</maintainer>
   <author email="ajtudela@gmail.com">Alberto Tudela</author>
+  <author email="opfernandez@uma.es">Óscar Pons Fernández</author>
+  <author email="jgaleas@uma.es">José Galeas Merchán</author>
   <license>TODO: License declaration</license>
 
   <depend>rclpy</depend>

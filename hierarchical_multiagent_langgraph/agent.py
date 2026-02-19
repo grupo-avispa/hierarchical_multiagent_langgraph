@@ -461,9 +461,9 @@ class SinglePurposeAgent(LangGraphBase):
 
         # Compile the graph workflow
         self.graph = workflow.compile()
-    
+
     # ========== LANGGRAPH TOOLS ==========
-    
+
     # If needed, can add more tools here that the agent can call during its reasoning process.
     # both lang style and MCP-based tools are supported. if needed define langchain tools as the following example.
     # @staticmethod

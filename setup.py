@@ -31,7 +31,7 @@ setup(
     zip_safe=True,
     maintainer='Alberto Tudela',
     maintainer_email='ajtudela@gmail.com',
-    description='TODO: Package description',
+    description='Hierarchical multi-agent system where a Supervisor coordinates multiple Single-Purpose Agents (SPAs) to execute complex tasks.',
     license='TODO: License declaration',
     extras_require={
         'test': [

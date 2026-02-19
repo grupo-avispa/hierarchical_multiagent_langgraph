@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 
-# Copyright (c) 2025 Jose Galeas
-# Copyright (c) 2025 Grupo Avispa, DTE, Universidad de Málaga
+# Copyright (c) 2026 Jose Galeas
+# Copyright (c) 2026 Grupo Avispa, DTE, Universidad de Málaga
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
