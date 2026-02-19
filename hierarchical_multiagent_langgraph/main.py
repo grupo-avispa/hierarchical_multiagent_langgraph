@@ -483,6 +483,11 @@ def main(args=None) -> None:
         executor.spin()
     except (KeyboardInterrupt, Exception, ExternalShutdownException) as e:
         print(f'Shutting down agent node due to: {e}')
+    finally:
+        if agent is not None:
+            agent.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':
