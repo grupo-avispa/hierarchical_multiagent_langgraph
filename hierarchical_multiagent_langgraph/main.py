@@ -153,14 +153,8 @@ class HierarchicalMultiagent(LangGraphRosBase):
             agent_timeout=self.agent_timeout
         )
 
-        # Retrieve tools for Ollama agent
-        self.loop.run_until_complete(
-            self.supervisor_manager.ollama_agent.retrieve_tools(
-                self.supervisor_manager.supervisor_tools
-            ))
-
-        # Build the LangGraph workflow
-        self.build_graph()
+        # Register supervisor tools and compile LangGraph workflow
+        self.loop.run_until_complete(self.supervisor_manager.initialize())
 
         self.get_logger().info('Hierarchical Multiagent LangGraph Node has been started.')
 
@@ -171,51 +165,6 @@ class HierarchicalMultiagent(LangGraphRosBase):
         Called periodically (every 1.0 second) by ROS2 timer.
         """
         self.supervisor_manager.executor.consume_pending_agents()
-
-    def build_graph(self) -> None:
-        """
-        Initialize and compile the supervisor's LangGraph workflow.
-
-        Calls supervisor_manager.make_graph() asynchronously in the main event loop
-        to construct the supervisor's state machine. The graph implements the
-        hierarchical multi-agent coordination workflow with nodes for initial setup,
-        task analysis, agent management (via tools), and response synthesis.
-
-        Graph Components:
-            - set_initial_messages: Initialize conversation state from user prompt
-            - analyze_task: LLM supervisor analyzes query and decides on agents
-            - route_on_tool_call: Route supervisor tool calls (create/delete agents)
-            - finalize_conversation: Aggregate agent results into final response
-
-        Compilation:
-            - Converts workflow definition to compiled graph (LangGraph)
-            - Prepares graph for invocation (ainvoke, invoke)
-            - Enables checkpoint/memory persistence via configurable thread_id
-
-        Error Handling:
-            - Catches and logs exceptions from make_graph()
-            - Re-raises exceptions to prevent node startup with incomplete graph
-            - Ensures node initialization fails fast on graph building errors
-
-        Parameters:
-            None: Uses supervisor_manager and main event loop
-
-        Returns:
-            None: Compiled graph stored in supervisor_manager.graph
-
-        Side Effects:
-            - Populates supervisor_manager.graph with compiled LangGraph
-            - Logs success/failure of graph compilation
-            - May raise exceptions that propagate to __init__
-        """
-        # Initialize and compile the LangGraph workflow
-        try:
-            self.loop.run_until_complete(self.supervisor_manager.make_graph())
-        except Exception as e:
-            self.get_logger().error(f'Failed to create LangGraph workflow: {e}')
-            raise
-
-        self.get_logger().info('SupervisorManager graph created successfully...')
 
     def _process_graph(self, input_state: InputState, thread_id: str) -> None:
         """

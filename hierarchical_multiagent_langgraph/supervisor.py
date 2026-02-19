@@ -142,6 +142,17 @@ class SupervisorManager(LangGraphBase):
         # Create tools with access to self
         self.supervisor_tools = self._create_supervisor_tools()
 
+    async def initialize(self) -> None:
+        """
+        Complete async initialization: register tools and compile LangGraph.
+
+        Combines ``retrieve_tools()`` and ``make_graph()`` into a single
+        awaitable entry-point so callers do not need to access internal
+        attributes like ``ollama_agent`` or ``supervisor_tools``.
+        """
+        await self.ollama_agent.retrieve_tools(self.supervisor_tools)
+        await self.make_graph()
+
     # ========== LANGGRAPH TOOLS ==========
 
     def _create_supervisor_tools(self) -> list:
