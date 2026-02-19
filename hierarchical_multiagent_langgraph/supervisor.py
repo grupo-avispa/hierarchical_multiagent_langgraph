@@ -310,7 +310,6 @@ class SupervisorManager(LangGraphBase):
                 mcp_servers_config=supervisor.spa_params.get('mcp_servers_config')
             )
             new_agent.set_id(agent_id)
-            new_agent.set_status(AgentStatus.RUNNING)
 
             # Add agent task to pending queue (producer-consumer pattern)
             # The timer callback will consume and execute agents in their own threads
