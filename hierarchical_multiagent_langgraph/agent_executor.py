@@ -177,24 +177,36 @@ class AgentExecutor:
 
     def consume_pending_agents(self) -> None:
         """
-        Consume all pending agents from the queue and execute each in a thread.
+        Drain all pending agents, sort by priority, and execute each in a thread.
 
-        Pops all currently pending agents and spawns a dedicated daemon thread
-        for each one. Each thread creates its own asyncio event loop and blocks
-        until agent execution completes.
+        Atomically drains all pending agents from the registry, sorts them
+        by priority (highest first), and spawns a dedicated daemon thread
+        for each one. Each thread creates its own asyncio event loop and
+        blocks until agent execution completes.
 
         This method is non-blocking from the caller's perspective: it returns
         immediately after spawning the threads.
         """
-        while True:
-            agent_task = self.registry.pop_pending()
-            if agent_task is None:
-                break
+        pending_tasks = self.registry.drain_all_pending()
+        if not pending_tasks:
+            return
+
+        self._log_info(
+            f'Dispatching {len(pending_tasks)} pending agent(s) '
+            f'sorted by priority...'
+        )
+
+        for agent_task in pending_tasks:
+            agent_id = agent_task.agent.get_id()
+            self._log_info(
+                f'Spawning daemon thread for agent {agent_id} '
+                f'(priority={agent_task.priority.name})'
+            )
             thread = threading.Thread(
                 target=self._execute_agent_task,
                 args=(agent_task,),
                 daemon=True,
-                name=f'agent-{agent_task.agent.get_id()}'
+                name=f'agent-{agent_id}',
             )
             thread.start()
 
@@ -282,7 +294,7 @@ class AgentExecutor:
         asyncio.set_event_loop(loop)
 
         # Schedule the agent execution coroutine
-        agent_async_task = loop.create_task(
+        coroutine_task = loop.create_task(
             self.run_agent(agent_task.agent, agent_task.input_state)
         )
 
@@ -290,18 +302,18 @@ class AgentExecutor:
         running_agent = RunningAgentsState(
             agent_id=agent_id,
             input_prompt=agent_task.input_state['messages'][0]['content'],
-            coroutine_handler=agent_async_task,
+            coroutine_handler=coroutine_task,
             event_loop=loop,
         )
         self.registry.add_running(running_agent)
 
-        # Block until the agent task completes
+        # Block this thread until the agent task completes
         try:
             self._log_info(
                 f'Working on agent [{agent_id}]'
                 f' in thread [{threading.current_thread().name}]...'
             )
-            loop.run_until_complete(agent_async_task)
+            loop.run_until_complete(coroutine_task)
         except asyncio.CancelledError:
             self._log_info(f'Agent {agent_id} execution was cancelled.')
         finally:

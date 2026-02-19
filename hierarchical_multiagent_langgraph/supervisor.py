@@ -22,6 +22,7 @@ from hierarchical_multiagent_langgraph.agent_registry import (
     AgentRegistry,
     AgentTask,
     FinishedAgentsState,
+    TaskPriority,
 )
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import MemorySaver
@@ -170,6 +171,15 @@ class SupervisorManager(LangGraphBase):
                         'query': {
                             'type': 'string',
                             'description': 'The task description for the new agent.'
+                        },
+                        'priority': {
+                            'type': 'string',
+                            'description': (
+                                'Execution priority level: high, medium, or low. '
+                                'Higher priority agents are dispatched first.'
+                            ),
+                            'enum': ['high', 'medium', 'low'],
+                            'default': 'medium'
                         }
                     },
                     'required': ['query']
@@ -217,22 +227,32 @@ class SupervisorManager(LangGraphBase):
 
         @tool(
             'create_agent',
-            description='Creates a new agent to handle a specific task.'
+            description='Creates a new agent to handle a specific task with a given priority.'
         )
         @traceable(name='sup_create_agent')
-        def create_agent(query: str) -> str:
+        def create_agent(query: str, priority: str = 'medium') -> str:
             """Create and queue a new SinglePurposeAgent for task execution.
 
             Parameters
             ----------
             query : str
                 Task description / prompt for the new agent.
+            priority : str
+                Execution priority level. One of 'high', 'medium', or 'low'.
+                Higher priority agents are dispatched first. Defaults to 'medium'.
 
             Returns
             -------
             str
                 Confirmation message with the assigned agent ID.
             """
+            # Map priority string to TaskPriority enum
+            priority_map = {
+                'high': TaskPriority.HIGH,
+                'medium': TaskPriority.MEDIUM,
+                'low': TaskPriority.LOW,
+            }
+            task_priority = priority_map.get(priority.lower(), TaskPriority.MEDIUM)
             agent_id = supervisor.registry.next_id()
             query = f'Your assigned agent ID is {agent_id}. And your task is: {query}'
             supervisor._log_info(f'SUPERVISOR: Creating agent {agent_id} for task: {query}')
@@ -267,12 +287,20 @@ class SupervisorManager(LangGraphBase):
             new_agent.set_id(agent_id)
 
             # Add agent task to pending queue (producer-consumer pattern)
-            agent_task = AgentTask(agent=new_agent, input_state=initial_state)
+            agent_task = AgentTask(
+                agent=new_agent,
+                input_state=initial_state,
+                priority=task_priority,
+            )
             supervisor.registry.enqueue(agent_task)
             supervisor._log_info(
-                f'SUPERVISOR: Agent {agent_id} added to pending list successfully.')
+                f'SUPERVISOR: Agent {agent_id} (priority={priority}) '
+                f'added to pending list successfully.')
 
-            return f'Agent {agent_id} created successfully for task: {query}'
+            return (
+                f'Agent {agent_id} created successfully '
+                f'(priority={priority}) for task: {query}'
+            )
 
         return create_agent
 

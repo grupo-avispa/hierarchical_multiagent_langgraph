@@ -14,11 +14,33 @@ Key components:
 """
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from enum import IntEnum
 from threading import Event, Lock
 
 from hierarchical_multiagent_langgraph.agent import AgentStatus, SinglePurposeAgent
 from langgraph_base_ros.chat_template_render import Messages
+
+
+class TaskPriority(IntEnum):
+    """Priority levels for agent task scheduling.
+
+    Lower integer values indicate higher priority. Agents with higher
+    priority are dispatched first when multiple agents are pending.
+
+    Attributes
+    ----------
+    HIGH : int
+        Highest priority (0). Dispatched before all others.
+    MEDIUM : int
+        Default priority (1). Standard execution order.
+    LOW : int
+        Lowest priority (2). Dispatched after higher priority tasks.
+    """
+
+    HIGH = 0
+    MEDIUM = 1
+    LOW = 2
 
 
 @dataclass
@@ -40,6 +62,7 @@ class AgentTask:
 
     agent: SinglePurposeAgent = None  # type: ignore[assignment]
     input_state: Messages = None  # type: ignore[assignment]
+    priority: TaskPriority = field(default=TaskPriority.MEDIUM)
 
 
 @dataclass
@@ -204,6 +227,26 @@ class AgentRegistry:
         check the shutdown flag and exit cleanly.
         """
         self._pending_event.set()
+
+    def drain_all_pending(self) -> list[AgentTask]:
+        """
+        Drain all pending tasks sorted by priority (highest first).
+
+        Atomically removes all pending tasks from the queue and returns
+        them sorted by ascending ``TaskPriority`` value (lower value =
+        higher priority).
+
+        Returns
+        -------
+        list[AgentTask]
+            All previously pending tasks sorted by priority, or an
+            empty list if the queue was empty.
+        """
+        with self._lock:
+            tasks = list(self._pending)
+            self._pending.clear()
+        tasks.sort(key=lambda t: t.priority)
+        return tasks
 
     def add_running(self, state: RunningAgentsState) -> None:
         """
