@@ -20,7 +20,6 @@ from enum import Enum
 import json
 
 from fastmcp import Client
-from langchain.tools import tool
 from langgraph.graph import START, StateGraph
 from langgraph_base_ros.chat_template_render import Messages
 from langgraph_base_ros.langgraph_base import LangGraphBase
@@ -273,7 +272,7 @@ class SinglePurposeAgent(LangGraphBase):
             self.state = await self.ollama_agent.invoke(state=state)  # type: ignore[union-attr]
         except ValueError as e:
             self._log_error(f'AGENT: Error during Ollama agent invocation: {e}')
-            raise e
+            raise
 
         return self.state
 
@@ -433,7 +432,8 @@ class SinglePurposeAgent(LangGraphBase):
     # ========== LANGGRAPH TOOLS ==========
 
     # If needed, can add more tools here that the agent can call during its reasoning process.
-    # both lang style and MCP-based tools are supported. if needed define langchain tools as the following example.
+    # Both LangChain-style and MCP-based tools are supported.
+    # Define langchain tools as in the following example:
     # @staticmethod
     # @tool('your_tool_name',
     #       description='Description of what the tool does and when to use it.',
@@ -441,9 +441,6 @@ class SinglePurposeAgent(LangGraphBase):
     #           your_arg_schema_here: 'Description of the argument and its expected format.',
     #       })
     # def your_tool_name(your_arg_schema_here: str) -> str:
-    #     """
-    #     Docstring for your tool function.
-    #     """
-    #     # Implement the logic for your tool here
+    #     """Docstring for your tool function."""
     #     result = f'Processed argument: {your_arg_schema_here}'
     #     return result

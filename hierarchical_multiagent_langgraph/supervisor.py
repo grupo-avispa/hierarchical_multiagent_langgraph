@@ -465,7 +465,7 @@ class SupervisorManager(LangGraphBase):
             state = await self.ollama_agent.invoke(state=state)
         except ValueError as e:
             self._log_error(f'SUPERVISOR: Error during Ollama agent invocation: {e}')
-            raise e
+            raise
 
         return state
 
