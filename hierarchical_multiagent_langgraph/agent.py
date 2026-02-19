@@ -290,66 +290,42 @@ class SinglePurposeAgent(LangGraphBase):
         """
         Conditional routing: determine whether to continue reasoning or finish task.
 
-        Examines the last message in conversation to decide next action. Implements
-        step counting to enforce max_steps limit and prevent infinite loops. Routes
-        to either another query_response cycle or final finalization.
+        Examines the last message in conversation to decide next action. Uses
+        the shared ``_track_step()`` helper for step counting and tool call
+        detection. Routes to either another query_response cycle or finalization.
 
-        Step Counting Logic:
-            1. Increments step counter on each call
-            2. Checks if last message is a tool call (LLM requesting tool execution)
-            3. If tool call and steps < max_steps: route to 'agent' (query_response)
-            4. If tool call and steps >= max_steps: route to 'finish' (force termination)
-            5. If no tool call: agent is done, route to 'finish'
-
-        Message Inspection:
-            - Detects tool calls by checking last message role == 'tool'
-            - Logs final response content when no tool call present
-            - Tracks total message count for debugging
-
-        State Transition:
-            - Returns 'agent': Continue reasoning loop (query_response node)
-            - Returns 'finish': Proceed to finalization (finish_ollama_interaction node)
+        Routing Logic:
+            - Tool call present and under max_steps → 'agent' (continue)
+            - Tool call present but max_steps reached → 'finish' (force exit)
+            - No tool call → 'finish' (task naturally complete)
 
         Parameters:
             state (Messages): Current conversation state with message history.
 
         Returns:
             str: Next node identifier ('agent' or 'finish') for conditional edge routing.
-
-        Side Effects:
-            - Increments self.steps counter
-            - Updates self.messages_count
-            - Logs step count, tool detection, and final responses
-            - Logs error if max_steps reached during routing
-
-        Example:
-            Step 1: LLM generates tool call → returns 'agent' (continue)
-            Step 2: LLM generates tool call → returns 'agent' (continue)
-            Step 3: max_steps=3, tool call → returns 'finish' (force exit)
         """
-        self.steps: int = self.steps + 1
-        uc = 'finish'
-        self._log_info(f'AGENT: Managing steps, current step: {self.steps}')
         try:
-            # Check if the last message contains a tool call
-            if state['messages'] and state['messages'][-1]['role'] == 'tool':
-                if self.steps < self.max_steps:
-                    uc = 'agent'
-                else:
-                    self._log_info('AGENT: Maximum steps reached, finishing interaction.')
-            else:
-                self._log_info('AGENT: No tool call detected, finishing interaction.')
-                self._log_info(
-                    'AGENT: Final response from assistant:\n'
-                    f"{state['messages'][-1]['content']}"
-                )
-            # Update messages count
-            self.messages_count = len(state['messages'])
+            has_tool_call, max_steps_reached = self._track_step(state)
+            self._log_info(f'AGENT: Managing steps, current step: {self.steps}')
+
+            if max_steps_reached:
+                self._log_info('AGENT: Maximum steps reached, finishing interaction.')
+                return 'finish'
+
+            if has_tool_call:
+                return 'agent'
+
+            self._log_info('AGENT: No tool call detected, finishing interaction.')
+            self._log_info(
+                'AGENT: Final response from assistant:\n'
+                f"{state['messages'][-1]['content']}"
+            )
             self._log_info(f'AGENT: Total messages in conversation: {self.messages_count}')
+            return 'finish'
         except Exception as e:
             self._log_warning(f'AGENT: Error in manage_steps: {e}')
-            uc = 'finish'
-        return uc
+            return 'finish'
 
     @traceable
     async def finish_ollama_interaction(self, state: Messages) -> Messages:

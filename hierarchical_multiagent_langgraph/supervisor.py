@@ -697,46 +697,47 @@ class SupervisorManager(LangGraphBase):
         """
         Route the conversation flow based on tool call presence.
 
-        Checks if the last message contains a tool call to determine whether
-        to continue the agent loop or finish the interaction. Also enforces
-        the maximum step limit to prevent infinite loops.
+        Uses the shared ``_track_step()`` helper for step counting and tool call
+        detection. The supervisor finishes when a tool call is detected (tool was
+        executed successfully), and retries when no tool call is found (LLM
+        responded with plain text instead of using tools).
 
         Parameters:
             state (Messages): Current conversation state with messages.
+
         Returns:
             str: Next node to transition to ('agent' to continue, 'finish' to end).
         """
-        self.steps: int = self.steps + 1
-        uc = 'agent'
-        self._log_info(f'SUPERVISOR: Managing steps, current step: {self.steps}')
         try:
-            # Check if the last message contains a tool call
-            if state['messages'] and state['messages'][-1]['role'] == 'tool':
-                # Finish if tool call detected
-                self._log_info('Tool call detected in the last message.')
-                uc = 'finish'
-            else:
-                self._log_warning('No tool call detected, trying again.')
-                self._log_warning(
-                    'SUPERVISOR: Incorrect response from assistant:\n'
-                    f"{state['messages'][-1]['content']}")
-                state['messages'].append(
-                    Message(
-                        role='user',
-                        content='Try again, remember to use the tools provided, '
-                        'you should not respond directly.'
-                    )
-                )
-            if self.steps > self.max_steps:
+            has_tool_call, max_steps_reached = self._track_step(state)
+            self._log_info(f'SUPERVISOR: Managing steps, current step: {self.steps}')
+
+            if max_steps_reached:
                 self._log_warning('Maximum steps reached, finishing interaction NOW ...')
-                uc = 'finish'
-            # Update messages count
-            self.messages_count = len(state['messages'])
-            self._log_info(f'SUPERVISOR: Total messages in conversation: {self.messages_count}')
+                return 'finish'
+
+            if has_tool_call:
+                self._log_info('Tool call detected in the last message.')
+                return 'finish'
+
+            # No tool call: ask LLM to retry with tools
+            self._log_warning('No tool call detected, trying again.')
+            self._log_warning(
+                'SUPERVISOR: Incorrect response from assistant:\n'
+                f"{state['messages'][-1]['content']}")
+            state['messages'].append(
+                Message(
+                    role='user',
+                    content='Try again, remember to use the tools provided, '
+                    'you should not respond directly.'
+                )
+            )
+            self._log_info(
+                f'SUPERVISOR: Total messages in conversation: {self.messages_count}')
+            return 'agent'
         except Exception as e:
-            self._log_error(f'SUPERVISOR: Error in manage_steps: {e}')
-            uc = 'finish'
-        return uc
+            self._log_error(f'SUPERVISOR: Error in route_on_tool_call: {e}')
+            return 'finish'
 
     @traceable
     async def finalize_conversation(self, state: Messages) -> Messages:
