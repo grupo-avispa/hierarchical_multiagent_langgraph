@@ -315,9 +315,8 @@ class SupervisorManager(LangGraphBase):
             # Add agent task to pending queue (producer-consumer pattern)
             # The timer callback will consume and execute agents in their own threads
             agent_task = AgentTask(agent=new_agent, input_state=initial_state)
-            supervisor.agent_lists_lock.acquire()
-            supervisor.pending_agents_list.append(agent_task)
-            supervisor.agent_lists_lock.release()
+            with supervisor.agent_lists_lock:
+                supervisor.pending_agents_list.append(agent_task)
             supervisor._log_info(
                 f'SUPERVISOR: Agent {agent_id} added to pending list successfully.')
 
@@ -360,53 +359,55 @@ class SupervisorManager(LangGraphBase):
             """
             # Initialize message
             message = f'Error: Agent {agent_id} not found in running agents'
-            # Get lock for thread-safe access
-            supervisor.agent_lists_lock.acquire()
-            # Check if agent exists
-            for _, running_agent in enumerate(supervisor.running_agents_list):
-                if running_agent.agent_id == agent_id:
-                    query = running_agent.input_prompt
-                    # FIRST: Stop the behavior tree via MCP client BEFORE cancelling the agent
-                    # This ensures the event loop is still running and can process the request
-                    if supervisor.ollama_agent.mcp_client is not None:
-                        try:
-                            supervisor._log_info('Stopping behavior tree via MCP client...')
-                            # Use run_coroutine_threadsafe since the event loop is already running
-                            stop_future = asyncio.run_coroutine_threadsafe(
-                                supervisor.ollama_agent.mcp_client.call_tool(
-                                    'stop_behavior_tree',
-                                    arguments={'execution_id': str(agent_id)}
-                                ),
-                                running_agent.event_loop
+            # Thread-safe access to agent lists
+            with supervisor.agent_lists_lock:
+                for _, running_agent in enumerate(supervisor.running_agents_list):
+                    if running_agent.agent_id == agent_id:
+                        query = running_agent.input_prompt
+                        # FIRST: Stop the behavior tree via MCP client BEFORE cancelling
+                        # This ensures the event loop is still running
+                        if supervisor.ollama_agent.mcp_client is not None:
+                            try:
+                                supervisor._log_info(
+                                    'Stopping behavior tree via MCP client...')
+                                # Use run_coroutine_threadsafe since the loop is running
+                                stop_future = asyncio.run_coroutine_threadsafe(
+                                    supervisor.ollama_agent.mcp_client.call_tool(
+                                        'stop_behavior_tree',
+                                        arguments={'execution_id': str(agent_id)}
+                                    ),
+                                    running_agent.event_loop
+                                )
+                                result = stop_future.result(timeout=8.0)
+                                supervisor._log_info(
+                                    f'Behavior tree stopped successfully. Result: {result}'
+                                )
+                            except Exception as e:
+                                supervisor._log_error(
+                                    f'ERROR stopping behavior tree for AGENT [{agent_id}]: '
+                                    f'{type(e).__name__}: {e}\n{traceback.format_exc()}'
+                                )
+                        # THEN: Cancel the agent's coroutine AFTER stopping the BT
+                        if running_agent.event_loop is not None:
+                            running_agent.event_loop.call_soon_threadsafe(
+                                running_agent.coroutine_handler.cancel
                             )
-                            result = stop_future.result(timeout=8.0)
-                            supervisor._log_info(
-                                f'Behavior tree stopped successfully. Result: {result}'
-                            )
-                        except Exception as e:
-                            supervisor._log_error(
-                                f'ERROR stopping behavior tree for AGENT [{agent_id}]: '
-                                f'{type(e).__name__}: {e}\n{traceback.format_exc()}'
-                            )
-                    # THEN: Cancel the agent's coroutine AFTER stopping the behavior tree
-                    if running_agent.event_loop is not None:
-                        running_agent.event_loop.call_soon_threadsafe(
-                            running_agent.coroutine_handler.cancel
+                        else:
+                            running_agent.coroutine_handler.cancel()
+                        supervisor.running_agents_list.remove(running_agent)
+                        # Create finished agent state with FAILURE due to cancellation
+                        finished_state = FinishedAgentsState(
+                            agent_id=agent_id,
+                            input_prompt=query,
+                            agent_result='Agent execution was cancelled by supervisor.',
+                            status=AgentStatus.FAILURE
                         )
-                    else:
-                        running_agent.coroutine_handler.cancel()
-                    supervisor.running_agents_list.remove(running_agent)
-                    # Create finished agent state with FAILURE due to cancellation
-                    finished_state = FinishedAgentsState(
-                        agent_id=agent_id,
-                        input_prompt=query,
-                        agent_result='Agent execution was cancelled by supervisor.',
-                        status=AgentStatus.FAILURE
-                    )
-                    supervisor.finished_agents_list.append(finished_state)
-                    message = f'Agent {agent_id} deleted successfully (was working on: {query})'
-                    break
-            supervisor.agent_lists_lock.release()
+                        supervisor.finished_agents_list.append(finished_state)
+                        message = (
+                            f'Agent {agent_id} deleted successfully '
+                            f'(was working on: {query})'
+                        )
+                        break
 
             supervisor._log_info(message)
             return message
@@ -588,13 +589,12 @@ class SupervisorManager(LangGraphBase):
             execution_result.status = AgentStatus.FAILURE
 
         # Store the execution result in the finished agents list
-        self.agent_lists_lock.acquire()
-        for running_agent in self.running_agents_list:
-            if running_agent.agent_id == agent_id:
-                self.running_agents_list.remove(running_agent)
-                break
-        self.finished_agents_list.append(execution_result)
-        self.agent_lists_lock.release()
+        with self.agent_lists_lock:
+            for running_agent in self.running_agents_list:
+                if running_agent.agent_id == agent_id:
+                    self.running_agents_list.remove(running_agent)
+                    break
+            self.finished_agents_list.append(execution_result)
 
     def consume_pending_agents(self) -> None:
         """
@@ -646,10 +646,9 @@ class SupervisorManager(LangGraphBase):
         """
         # Try to get a pending agent from the list
         agent_idle = None
-        self.agent_lists_lock.acquire()
-        if len(self.pending_agents_list) > 0:
-            agent_idle = self.pending_agents_list.pop(0)
-        self.agent_lists_lock.release()
+        with self.agent_lists_lock:
+            if len(self.pending_agents_list) > 0:
+                agent_idle = self.pending_agents_list.pop(0)
 
         if agent_idle is not None:
             agent_id = agent_idle.agent.get_id()
@@ -676,9 +675,8 @@ class SupervisorManager(LangGraphBase):
             )
 
             # Add to running agents list
-            self.agent_lists_lock.acquire()
-            self.running_agents_list.append(running_agent)
-            self.agent_lists_lock.release()
+            with self.agent_lists_lock:
+                self.running_agents_list.append(running_agent)
 
             # Need to await the agent task to completion
             try:
@@ -851,31 +849,31 @@ class SupervisorManager(LangGraphBase):
         self.ollama_agent.reset_memory()
 
         # Build context about current agents
-        self.agent_lists_lock.acquire()
-        # Log pending agents
-        self._log_info('\n--- IDLE AGENTS ---\n')
-        for agent_idle in self.pending_agents_list:
-            self._log_info(
-                f'  Idle Agent [{agent_idle.agent.get_id()}]: '
-                f'{agent_idle.input_state["messages"][0]["content"]} '
-                f'(Status: IDLE)'
-            )
-        # Log running agents
-        self._log_info('\n--- RUNNING AGENTS ---\n')
-        for agent_run in self.running_agents_list:
-            self._log_info(
-                f'  Running Agent [{agent_run.agent_id}]: {agent_run.input_prompt} '
-                f'(Status: RUNNING)'
-            )
-        # Log finished agents
-        self._log_info('\n--- FINISHED AGENTS ---\n')
-        for agent_finished in self.finished_agents_list:
-            self._log_info(
-                f'  Finished Agent [{agent_finished.agent_id}]: {agent_finished.input_prompt} '
-                f'(Status: {agent_finished.status})'
-            )
-        self._log_info('\n-------------------\n')
-        self.agent_lists_lock.release()
+        with self.agent_lists_lock:
+            # Log pending agents
+            self._log_info('\n--- IDLE AGENTS ---\n')
+            for agent_idle in self.pending_agents_list:
+                self._log_info(
+                    f'  Idle Agent [{agent_idle.agent.get_id()}]: '
+                    f'{agent_idle.input_state["messages"][0]["content"]} '
+                    f'(Status: IDLE)'
+                )
+            # Log running agents
+            self._log_info('\n--- RUNNING AGENTS ---\n')
+            for agent_run in self.running_agents_list:
+                self._log_info(
+                    f'  Running Agent [{agent_run.agent_id}]: {agent_run.input_prompt} '
+                    f'(Status: RUNNING)'
+                )
+            # Log finished agents
+            self._log_info('\n--- FINISHED AGENTS ---\n')
+            for agent_finished in self.finished_agents_list:
+                self._log_info(
+                    f'  Finished Agent [{agent_finished.agent_id}]: '
+                    f'{agent_finished.input_prompt} '
+                    f'(Status: {agent_finished.status})'
+                )
+            self._log_info('\n-------------------\n')
 
         self.messages_count = len(state['messages'])
         self._log_info(
