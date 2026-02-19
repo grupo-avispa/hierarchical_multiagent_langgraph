@@ -89,6 +89,7 @@ class SupervisorManager(LangGraphBase):
         max_steps: int = 5,
         system_prompt_path: str | None = None,
         spa_params: dict | None = None,
+        agent_timeout: float = 120.0,
     ) -> None:
         """
         Initialize the Supervisor Manager.
@@ -109,8 +110,8 @@ class SupervisorManager(LangGraphBase):
             spa_params (dict | None): Configuration dictionary passed to all
                 created SinglePurposeAgent instances. Required for operation.
                 Defaults to None.
-            loop (asyncio.AbstractEventLoop | None): Event loop for async agent
-                execution. If None, uses asyncio.get_event_loop(). Defaults to None.
+            agent_timeout (float): Maximum time in seconds for a single agent
+                execution before it is forcefully terminated. Defaults to 120.0.
 
         Raises:
             ValueError: If ollama_agent is not provided.
@@ -129,6 +130,8 @@ class SupervisorManager(LangGraphBase):
         self.ollama_agent: Ollama = self.ollama_agent
         # Thread-safe registry for agent lifecycle management
         self.registry = AgentRegistry()
+        # Maximum time in seconds for a single agent execution
+        self.agent_timeout = agent_timeout
         # Load system prompt to attribute sys_prompt
         self._get_system_prompt(system_prompt_path)
         # Create tools with access to self
@@ -491,9 +494,12 @@ class SupervisorManager(LangGraphBase):
                 self._log_info(f'AGENT [{agent_id}]: Building graph...')
                 await agent.make_graph()
 
-            # Run the agent's graph
+            # Run the agent's graph with timeout protection
             self._log_info(f'AGENT [{agent_id}]: Executing task...')
-            result = await agent.graph.ainvoke(initial_state)  # type: ignore[attr-defined]
+            result = await asyncio.wait_for(
+                agent.graph.ainvoke(initial_state),  # type: ignore[attr-defined]
+                timeout=self.agent_timeout
+            )
             execution_result.agent_result = result['messages'][-1]['content']
 
             # Update agent status based on execution result
@@ -505,6 +511,15 @@ class SupervisorManager(LangGraphBase):
         except asyncio.CancelledError:
             self._log_error(f'AGENT [{agent_id}]: Execution cancelled by supervisor.')
             raise
+        except asyncio.TimeoutError:
+            self._log_error(
+                f'AGENT [{agent_id}]: Execution timed out after '
+                f'{self.agent_timeout}s.')
+            agent.set_status(AgentStatus.FAILURE)
+            execution_result.agent_result = (
+                f'Agent execution timed out after {self.agent_timeout} seconds.'
+            )
+            execution_result.status = AgentStatus.FAILURE
         except Exception as e:
             self._log_error(f'ERROR in AGENT {agent_id}: {e}')
             agent.set_status(AgentStatus.FAILURE)

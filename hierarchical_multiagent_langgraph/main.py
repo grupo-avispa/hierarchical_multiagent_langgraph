@@ -124,7 +124,8 @@ class HierarchicalMultiagent(LangGraphRosBase):
             ollama_agent=self.ollama_agent,
             max_steps=self.max_steps,
             system_prompt_path=self.system_prompt_file,
-            spa_params=self.spa_params
+            spa_params=self.spa_params,
+            agent_timeout=self.agent_timeout
         )
 
         # Retrieve tools for Ollama agent
@@ -415,6 +416,13 @@ class HierarchicalMultiagent(LangGraphRosBase):
             'spa_enable_thinking').get_parameter_value().bool_value
         self.get_logger().info(
             f'The parameter spa_enable_thinking is set to: [{self.spa_params["think"]}]')
+
+        # Declare and retrieve agent execution timeout (seconds)
+        self.declare_parameter('agent_timeout', 120.0)
+        self.agent_timeout = self.get_parameter(
+            'agent_timeout').get_parameter_value().double_value
+        self.get_logger().info(
+            f'The parameter agent_timeout is set to: [{self.agent_timeout}]')
 
 
 def main(args=None) -> None:
