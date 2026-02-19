@@ -12,6 +12,8 @@ Main Components:
     - Agent execution threads: Each agent runs in its own event loop for isolation.
 """
 
+from typing import Any
+
 from hierarchical_multiagent_langgraph.supervisor import (
     InputState,
     SupervisorManager
@@ -23,6 +25,29 @@ from llm_interactions_msgs.srv import CallAgent
 import rclpy
 from rclpy.callback_groups import ReentrantCallbackGroup, MutuallyExclusiveCallbackGroup
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
+
+# Data-driven SPA parameter definitions: (ros_name, dict_key, default_value)
+# The value type is inferred from the default to select the correct ROS2 accessor.
+_SPA_PARAM_DEFS: list[tuple[str, str, Any]] = [
+    ('spa_mcp_servers', 'mcp_servers_config', 'mcp.json'),
+    ('spa_system_prompt_file', 'system_prompt_file', 'system_prompt.jinja'),
+    ('spa_template_type', 'template_type', 'qwen3'),
+    ('spa_template_file', 'template_file', 'qwen3.jinja'),
+    ('spa_llm_model', 'model', 'qwen3:0.6b'),
+    ('spa_tool_call_pattern', 'tool_call_pattern', '<tool_call>(.*?)</tool_call>'),
+    ('spa_available_tools', 'available_tools', ['execute_behavior_tree']),
+    ('spa_max_steps', 'max_steps', 5),
+    ('spa_enable_thinking', 'think', False),
+]
+
+# Maps Python type -> ROS2 ParameterValue attribute name
+_VALUE_ACCESSORS: dict[type, str] = {
+    str: 'string_value',
+    int: 'integer_value',
+    float: 'double_value',
+    bool: 'bool_value',
+    list: 'string_array_value',
+}
 
 
 class HierarchicalMultiagent(LangGraphRosBase):
@@ -297,49 +322,13 @@ class HierarchicalMultiagent(LangGraphRosBase):
         """
         Declare and retrieve ROS2 parameters for SinglePurposeAgent configuration.
 
-        Loads SPA-specific configuration from ROS2 parameter server. Declares
-        parameters with defaults, retrieves actual values (from launch files,
-        param files, or defaults), and stores in self.spa_params dictionary.
-        All values logged for verification.
+        Iterates over ``_SPA_PARAM_DEFS`` to declare each parameter with its
+        default value, retrieve the actual value from the ROS2 parameter server,
+        and log it. The correct ``ParameterValue`` accessor is inferred from the
+        Python type of the default value via ``_VALUE_ACCESSORS``.
 
-        Parameters Loaded:
-            - spa_mcp_servers (str, default='mcp.json'): Path to MCP servers config
-            - spa_system_prompt_file (str, default='system_prompt.jinja'): Jinja2 template path
-            - spa_template_type (str, default='qwen3'): LLM chat template type
-            - spa_llm_model (str, default='qwen3:0.6b'): Model name for Ollama
-            - spa_tool_call_pattern (str, default='<tool_call>(.*?)</tool_call>'): Regex pattern
-            - spa_max_steps (int, default=5): Maximum LangGraph steps per agent
-
-        Configuration Source Hierarchy:
-            1. Launch file parameters (highest priority)
-            2. Parameter file (.yaml) parameters
-            3. Declared defaults (lowest priority)
-
-        State Updates:
-            - Copies self.agent_params (from parent class) to self.spa_params
-            - Removes mcp_client if present (managed separately)
-            - Adds/updates SPA-specific parameters
-
-        Logging:
-            - Logs each parameter name and value at INFO level
-            - Provides verification that correct values loaded
-            - Helps debug configuration issues
-
-        Parameters:
-            None: Uses ROS2 parameter server via self.get_parameter()
-
-        Returns:
-            None: Stores results in self.spa_params dictionary
-
-        Side Effects:
-            - Declares 6 ROS2 parameters (idempotent if already declared)
-            - Populates self.spa_params with loaded values
-            - Logs all parameter values to ROS2 logger
-
-        Usage Context:
-            - Called during HierarchicalMultiagent.__init__()
-            - Before SupervisorManager creation
-            - Provides config for all subsequent SPAs created by supervisor
+        Additionally declares the ``agent_timeout`` parameter (float) which
+        controls the maximum execution time for a single agent.
         """
         # Initialize spa_params dictionary by copying agent_params
         self.spa_params = self.agent_params.copy()
@@ -347,69 +336,15 @@ class HierarchicalMultiagent(LangGraphRosBase):
         if 'mcp_client' in self.spa_params:
             del self.spa_params['mcp_client']
 
-        # Declare and retrieve MCP servers parameter
-        self.declare_parameter('spa_mcp_servers', 'mcp.json')
-        self.spa_params['mcp_servers_config'] = self.get_parameter(
-            'spa_mcp_servers').get_parameter_value().string_value
-        self.get_logger().info(
-            f'The parameter spa_mcp_servers is set to: [{self.spa_params["mcp_servers_config"]}]')
-
-        # Declare and retrieve system prompt template path parameter
-        self.declare_parameter('spa_system_prompt_file', 'system_prompt.jinja')
-        self.spa_params['system_prompt_file'] = self.get_parameter(
-            'spa_system_prompt_file').get_parameter_value().string_value
-        self.get_logger().info(
-            f'The parameter spa_system_prompt_file is set to: '
-            f'[{self.spa_params["system_prompt_file"]}]')
-
-        # Declare and retrieve model chat template file path parameter
-        self.declare_parameter('spa_template_type', 'qwen3')
-        self.spa_params['template_type'] = self.get_parameter(
-            'spa_template_type').get_parameter_value().string_value
-        self.get_logger().info(
-            f'The parameter spa_template_type is set to: [{self.spa_params["template_type"]}]')
-
-        # Declare and retrieve model chat template file name parameter
-        self.declare_parameter('spa_template_file', 'qwen3.jinja')
-        self.spa_params['template_file'] = self.get_parameter(
-            'spa_template_file').get_parameter_value().string_value
-        self.get_logger().info(
-            f'The parameter spa_template_file is set to: [{self.spa_params["template_file"]}]')
-
-        # Declare and retrieve LLM model name parameter
-        self.declare_parameter('spa_llm_model', 'qwen3:0.6b')
-        self.spa_params['model'] = self.get_parameter(
-            'spa_llm_model').get_parameter_value().string_value
-        self.get_logger().info(
-            f'The parameter spa_llm_model is set to: [{self.spa_params["model"]}]')
-        # Declare tool call regex pattern to extract tool calls from LLM response
-        self.declare_parameter('spa_tool_call_pattern', '<tool_call>(.*?)</tool_call>')
-        self.spa_params['tool_call_pattern'] = self.get_parameter(
-            'spa_tool_call_pattern').get_parameter_value().string_value
-        self.get_logger().info(
-            f'The parameter spa_tool_call_pattern is set to: '
-            f'[{self.spa_params["tool_call_pattern"]}]')
-
-        # Declare and retrieve available tools for SPA agents
-        self.declare_parameter('spa_available_tools', ['execute_behavior_tree'])
-        self.spa_params['available_tools'] = self.get_parameter(
-            'spa_available_tools').get_parameter_value().string_array_value
-        self.get_logger().info(
-            f'The parameter spa_available_tools is set to: '
-            f'[{self.spa_params["available_tools"]}]')
-
-        # Declare and retrieve LangGraph workflow parameters
-        self.declare_parameter('spa_max_steps', 5)
-        self.spa_params['max_steps'] = self.get_parameter(
-            'spa_max_steps').get_parameter_value().integer_value
-        self.get_logger().info(
-            f'The parameter spa_max_steps is set to: [{self.spa_params["max_steps"]}]')
-
-        self.declare_parameter('spa_enable_thinking', False)
-        self.spa_params['think'] = self.get_parameter(
-            'spa_enable_thinking').get_parameter_value().bool_value
-        self.get_logger().info(
-            f'The parameter spa_enable_thinking is set to: [{self.spa_params["think"]}]')
+        # Declare and retrieve all SPA parameters from the data-driven table
+        for ros_name, dict_key, default in _SPA_PARAM_DEFS:
+            self.declare_parameter(ros_name, default)
+            accessor = _VALUE_ACCESSORS[type(default)]
+            value = getattr(
+                self.get_parameter(ros_name).get_parameter_value(), accessor)
+            self.spa_params[dict_key] = value
+            self.get_logger().info(
+                f'The parameter {ros_name} is set to: [{value}]')
 
         # Declare and retrieve agent execution timeout (seconds)
         self.declare_parameter('agent_timeout', 120.0)
