@@ -23,7 +23,6 @@ from hierarchical_multiagent_langgraph.agent_registry import (
     AgentTask,
     FinishedAgentsState,
 )
-from jinja2 import Template
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
@@ -441,23 +440,10 @@ class SupervisorManager(LangGraphBase):
         # Build context about current agents from registry
         agents_list = self.registry.get_agents_context()
 
-        # Render the system prompt with initial context (empty agents list)
-        template = Template(self.sys_prompt)
-        rendered_system_prompt = template.render(
-            agents_context=agents_list
-        )
-        # self._log_info('SUPERVISOR:\n--- Rendered system prompt  ---')
-        # self._log_info(f'\n\n{rendered_system_prompt}\n')
-        # self._log_info('\n------------------------------')
-
         # Create initial context state with rendered system prompt
+        sys_message = self._render_system_prompt(agents_context=agents_list)
         current_state: Messages = {
-            'messages': [
-                Message(
-                    role='system',
-                    content=rendered_system_prompt
-                )
-            ]
+            'messages': [sys_message]
         }
 
         # Extract user query from input state and add to messages if present

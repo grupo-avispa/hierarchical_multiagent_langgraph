@@ -20,14 +20,12 @@ from enum import Enum
 import json
 
 from fastmcp import Client
-from jinja2 import Template
 from langchain.tools import tool
 from langgraph.graph import START, StateGraph
 from langgraph_base_ros.chat_template_render import Messages
 from langgraph_base_ros.langgraph_base import LangGraphBase
 from langgraph_base_ros.ollama_utils import Ollama
 from langsmith import traceable
-from ollama import Message
 
 
 class AgentStatus(str, Enum):
@@ -268,16 +266,10 @@ class SinglePurposeAgent(LangGraphBase):
                                     content[0].text)
                     except Exception as e:
                         self._log_warning(f'Error retrieving MCP tools: {e}')
-                # Render system prompt with resources
-                template = Template(self.sys_prompt)
-                rendered_system_prompt = template.render(
-                    resources=resources_content
-                )
-                # Prepend system prompt if not already present
-                state['messages'].insert(0, Message(
-                    role='system',
-                    content=rendered_system_prompt
-                ))
+                # Prepend rendered system prompt
+                sys_message = self._render_system_prompt(
+                    resources=resources_content)
+                state['messages'].insert(0, sys_message)
             self.state = await self.ollama_agent.invoke(state=state)  # type: ignore[union-attr]
         except ValueError as e:
             self._log_error(f'AGENT: Error during Ollama agent invocation: {e}')
