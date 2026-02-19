@@ -8,20 +8,22 @@ agents based on user tasks and LLM reasoning.
 
 Key components:
     - SupervisorManager: Main class that manages agent lifecycle and coordination.
-    - AgentTask: Data structure for pending agent tasks.
-    - RunningAgentsState: Tracks currently executing agents.
-    - FinishedAgentsState: Tracks completed agent executions and results.
+    - AgentRegistry: Thread-safe registry for agent lifecycle management.
     - InputState: Input schema for the supervisor workflow.
 """
 
 import asyncio
 import threading
-from dataclasses import dataclass
-from threading import Lock
 from typing import TypedDict
 import traceback
 
 from hierarchical_multiagent_langgraph.agent import AgentStatus, SinglePurposeAgent
+from hierarchical_multiagent_langgraph.agent_registry import (
+    AgentRegistry,
+    AgentTask,
+    FinishedAgentsState,
+    RunningAgentsState,
+)
 from jinja2 import Template
 from langchain_core.tools import tool
 from langgraph.checkpoint.memory import MemorySaver
@@ -49,77 +51,6 @@ class InputState(TypedDict):
     user_prompt: str
 
 
-@dataclass
-class AgentTask:
-    """
-    Encapsulates a pending agent task awaiting execution.
-
-    This data structure represents a task that has been created by the supervisor's
-    LLM but not yet started. Tasks are stored in a queue and executed asynchronously
-    by the supervisor when resources become available.
-
-    Attributes:
-        agent (SinglePurposeAgent | None): The SinglePurposeAgent instance that
-            will execute the task. Defaults to None (assigned during creation).
-        input_state (Messages | None): The initial message state containing the
-            task description and context for the agent. Defaults to None.
-    """
-
-    agent: SinglePurposeAgent = None  # type: ignore[assignment]
-    input_state: Messages = None  # type: ignore[assignment]
-
-
-@dataclass
-class RunningAgentsState:
-    """
-    Tracks the execution state of a currently running agent.
-
-    Maintains metadata about an agent that is actively executing its task.
-    Enables monitoring, timeout management, and graceful cancellation of
-    long-running agents. Stored in the supervisor's running agents list.
-
-    Attributes:
-        agent_id (int): Unique identifier of the running agent. Defaults to -1.
-        input_prompt (str): The original input prompt/task description given
-            to the agent. Defaults to empty string.
-        coroutine_handler (asyncio.Task | None): The asyncio Task object that
-            manages the agent's concurrent execution. Defaults to None.
-        event_loop (asyncio.AbstractEventLoop | None): Reference to the event loop
-            running the agent's coroutine. Used for cross-thread cancellation
-            if needed. Defaults to None.
-    """
-
-    agent_id: int = -1
-    input_prompt: str = ''
-    coroutine_handler: asyncio.Task = None  # type: ignore[assignment]
-    event_loop: asyncio.AbstractEventLoop = None  # type: ignore[assignment]
-
-
-@dataclass
-class FinishedAgentsState:
-    """
-    Captures the final state and results of a completed agent task.
-
-    Contains the execution summary for an agent that has finished its task,
-    whether successfully or with failure. This data is aggregated by the
-    supervisor to synthesize final responses and provide feedback to the user.
-
-    Attributes:
-        agent_id (int): Unique identifier of the finished agent. Defaults to -1.
-        input_prompt (str): The original task description given to the agent.
-            Defaults to empty string.
-        agent_result (str): The result or output produced by the agent's
-            execution. Defaults to empty string.
-        status (AgentStatus): The final execution status of the agent
-            (SUCCESS, FAILURE, or IDLE). Defaults to AgentStatus.IDLE.
-    """
-
-    agent_id: int = -1
-    input_prompt: str = ''
-    agent_result: str = ''
-    status: AgentStatus = AgentStatus.IDLE
-
-
 class SupervisorManager(LangGraphBase):
     """
     Hierarchical multi-agent supervisor orchestrating task decomposition and agent coordination.
@@ -141,12 +72,7 @@ class SupervisorManager(LangGraphBase):
         ensure safe concurrent access from multiple agent execution threads.
 
     Attributes:
-        loop (asyncio.AbstractEventLoop): Event loop for async agent execution and management.
-        pending_agents_list (list[AgentTask]): Queue of created but not-yet-started agents.
-        running_agents_list (list[RunningAgentsState]): Agents currently executing their tasks.
-        finished_agents_list (list[FinishedAgentsState]): Completed agents with results.
-        agent_id_counter (int): Auto-incrementing counter for unique agent IDs.
-        agent_lists_lock (Lock): Mutex protecting concurrent agent list access.
+        registry (AgentRegistry): Thread-safe registry for agent lifecycle management.
         supervisor_tools (list): Tools exposed to LLM for agent lifecycle control.
         sys_prompt (str): System prompt guiding supervisor behavior and reasoning.
         spa_params (dict): Configuration parameters for SinglePurposeAgent instances.
@@ -201,13 +127,8 @@ class SupervisorManager(LangGraphBase):
             raise ValueError('spa_params must be provided to SupervisorManager.')
         self.spa_params = spa_params
         self.ollama_agent: Ollama = self.ollama_agent
-        # List for pending agent, running agent, and finished agent states
-        self.pending_agents_list: list[AgentTask] = []
-        self.running_agents_list: list[RunningAgentsState] = []
-        self.finished_agents_list: list[FinishedAgentsState] = []
-        self.agent_id_counter: int = 1
-        # Mutex lock for thread-safe access to agent lists
-        self.agent_lists_lock = Lock()
+        # Thread-safe registry for agent lifecycle management
+        self.registry = AgentRegistry()
         # Load system prompt to attribute sys_prompt
         self._get_system_prompt(system_prompt_path)
         # Create tools with access to self
@@ -277,8 +198,7 @@ class SupervisorManager(LangGraphBase):
                 str: Confirmation message with assigned agent ID and task summary.
                     Format: "Agent {id} created successfully for task: {query}"
             """
-            agent_id = supervisor.agent_id_counter
-            supervisor.agent_id_counter += 1
+            agent_id = supervisor.registry.next_id()
             query = f'Your assigned agent ID is {agent_id}. And your task is: {query}'
             supervisor._log_info(f'SUPERVISOR: Creating agent {agent_id} for task: {query}')
 
@@ -314,8 +234,7 @@ class SupervisorManager(LangGraphBase):
             # Add agent task to pending queue (producer-consumer pattern)
             # The timer callback will consume and execute agents in their own threads
             agent_task = AgentTask(agent=new_agent, input_state=initial_state)
-            with supervisor.agent_lists_lock:
-                supervisor.pending_agents_list.append(agent_task)
+            supervisor.registry.enqueue(agent_task)
             supervisor._log_info(
                 f'SUPERVISOR: Agent {agent_id} added to pending list successfully.')
 
@@ -356,14 +275,8 @@ class SupervisorManager(LangGraphBase):
                 - Cancels agent's coroutine in its event loop
                 - Logs deletion action
             """
-            # Phase 1: Find the target agent under lock (fast lookup only)
-            target = None
-            with supervisor.agent_lists_lock:
-                target = next(
-                    (a for a in supervisor.running_agents_list
-                     if a.agent_id == agent_id),
-                    None
-                )
+            # Phase 1: Find the target agent (thread-safe lookup)
+            target = supervisor.registry.find_running(agent_id)
 
             if target is None:
                 message = f'Error: Agent {agent_id} not found in running agents'
@@ -404,20 +317,15 @@ class SupervisorManager(LangGraphBase):
             else:
                 target.coroutine_handler.cancel()
 
-            # Phase 3: Update lists under lock (fast mutation only)
-            with supervisor.agent_lists_lock:
-                supervisor.running_agents_list = [
-                    a for a in supervisor.running_agents_list
-                    if a.agent_id != agent_id
-                ]
-                # Create finished agent state with FAILURE due to cancellation
-                finished_state = FinishedAgentsState(
-                    agent_id=agent_id,
-                    input_prompt=query,
-                    agent_result='Agent execution was cancelled by supervisor.',
-                    status=AgentStatus.FAILURE
-                )
-                supervisor.finished_agents_list.append(finished_state)
+            # Phase 3: Update registry (thread-safe mutation)
+            supervisor.registry.remove_running(agent_id)
+            finished_state = FinishedAgentsState(
+                agent_id=agent_id,
+                input_prompt=query,
+                agent_result='Agent execution was cancelled by supervisor.',
+                status=AgentStatus.FAILURE
+            )
+            supervisor.registry.add_finished(finished_state)
 
             message = (
                 f'Agent {agent_id} deleted successfully '
@@ -602,13 +510,8 @@ class SupervisorManager(LangGraphBase):
             agent.set_status(AgentStatus.FAILURE)
             execution_result.status = AgentStatus.FAILURE
 
-        # Store the execution result in the finished agents list
-        with self.agent_lists_lock:
-            for running_agent in self.running_agents_list:
-                if running_agent.agent_id == agent_id:
-                    self.running_agents_list.remove(running_agent)
-                    break
-            self.finished_agents_list.append(execution_result)
+        # Store the execution result in the registry
+        self.registry.move_to_finished(agent_id, execution_result)
 
     def consume_pending_agents(self) -> None:
         """
@@ -658,11 +561,8 @@ class SupervisorManager(LangGraphBase):
             - Blocks calling thread during agent execution
             - Logs agent status via logger
         """
-        # Try to get a pending agent from the list
-        agent_idle = None
-        with self.agent_lists_lock:
-            if len(self.pending_agents_list) > 0:
-                agent_idle = self.pending_agents_list.pop(0)
+        # Try to get a pending agent from the registry
+        agent_idle = self.registry.pop_pending()
 
         if agent_idle is not None:
             agent_id = agent_idle.agent.get_id()
@@ -688,9 +588,8 @@ class SupervisorManager(LangGraphBase):
                 event_loop=loop
             )
 
-            # Add to running agents list
-            with self.agent_lists_lock:
-                self.running_agents_list.append(running_agent)
+            # Add to running agents list in registry
+            self.registry.add_running(running_agent)
 
             # Need to await the agent task to completion
             try:
@@ -718,25 +617,8 @@ class SupervisorManager(LangGraphBase):
         Returns:
             Messages: The initialized conversation state with system and user messages.
         """
-        # Build context about current agents
-        agents_list = [
-            {
-                'id': agent.agent_id,
-                'query': agent.input_prompt,
-                'result': '',
-                'status': 'RUNNING'
-            }
-            for agent in self.running_agents_list
-        ]
-        agents_list.extend([
-            {
-                'id': agent.agent_id,
-                'query': agent.input_prompt,
-                'result': agent.agent_result,
-                'status': agent.status
-            }
-            for agent in self.finished_agents_list
-        ])
+        # Build context about current agents from registry
+        agents_list = self.registry.get_agents_context()
 
         # Render the system prompt with initial context (empty agents list)
         template = Template(self.sys_prompt)
@@ -862,32 +744,29 @@ class SupervisorManager(LangGraphBase):
         self.steps = 0
         self.ollama_agent.reset_memory()
 
-        # Build context about current agents
-        with self.agent_lists_lock:
-            # Log pending agents
-            self._log_info('\n--- IDLE AGENTS ---\n')
-            for agent_idle in self.pending_agents_list:
-                self._log_info(
-                    f'  Idle Agent [{agent_idle.agent.get_id()}]: '
-                    f'{agent_idle.input_state["messages"][0]["content"]} '
-                    f'(Status: IDLE)'
-                )
-            # Log running agents
-            self._log_info('\n--- RUNNING AGENTS ---\n')
-            for agent_run in self.running_agents_list:
-                self._log_info(
-                    f'  Running Agent [{agent_run.agent_id}]: {agent_run.input_prompt} '
-                    f'(Status: RUNNING)'
-                )
-            # Log finished agents
-            self._log_info('\n--- FINISHED AGENTS ---\n')
-            for agent_finished in self.finished_agents_list:
-                self._log_info(
-                    f'  Finished Agent [{agent_finished.agent_id}]: '
-                    f'{agent_finished.input_prompt} '
-                    f'(Status: {agent_finished.status})'
-                )
-            self._log_info('\n-------------------\n')
+        # Build context about current agents from registry snapshot
+        summary = self.registry.get_summary()
+        self._log_info('\n--- IDLE AGENTS ---\n')
+        for agent_idle in summary['pending']:
+            self._log_info(
+                f'  Idle Agent [{agent_idle.agent.get_id()}]: '
+                f'{agent_idle.input_state["messages"][0]["content"]} '
+                f'(Status: IDLE)'
+            )
+        self._log_info('\n--- RUNNING AGENTS ---\n')
+        for agent_run in summary['running']:
+            self._log_info(
+                f'  Running Agent [{agent_run.agent_id}]: {agent_run.input_prompt} '
+                f'(Status: RUNNING)'
+            )
+        self._log_info('\n--- FINISHED AGENTS ---\n')
+        for agent_finished in summary['finished']:
+            self._log_info(
+                f'  Finished Agent [{agent_finished.agent_id}]: '
+                f'{agent_finished.input_prompt} '
+                f'(Status: {agent_finished.status})'
+            )
+        self._log_info('\n-------------------\n')
 
         self.messages_count = len(state['messages'])
         self._log_info(
