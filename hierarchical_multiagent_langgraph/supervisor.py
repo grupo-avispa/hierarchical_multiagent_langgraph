@@ -356,58 +356,73 @@ class SupervisorManager(LangGraphBase):
                 - Cancels agent's coroutine in its event loop
                 - Logs deletion action
             """
-            # Initialize message
-            message = f'Error: Agent {agent_id} not found in running agents'
-            # Thread-safe access to agent lists
+            # Phase 1: Find the target agent under lock (fast lookup only)
+            target = None
             with supervisor.agent_lists_lock:
-                for _, running_agent in enumerate(supervisor.running_agents_list):
-                    if running_agent.agent_id == agent_id:
-                        query = running_agent.input_prompt
-                        # FIRST: Stop the behavior tree via MCP client BEFORE cancelling
-                        # This ensures the event loop is still running
-                        if supervisor.ollama_agent.mcp_client is not None:
-                            try:
-                                supervisor._log_info(
-                                    'Stopping behavior tree via MCP client...')
-                                # Use run_coroutine_threadsafe since the loop is running
-                                stop_future = asyncio.run_coroutine_threadsafe(
-                                    supervisor.ollama_agent.mcp_client.call_tool(
-                                        'stop_behavior_tree',
-                                        arguments={'execution_id': str(agent_id)}
-                                    ),
-                                    running_agent.event_loop
-                                )
-                                result = stop_future.result(timeout=8.0)
-                                supervisor._log_info(
-                                    f'Behavior tree stopped successfully. Result: {result}'
-                                )
-                            except Exception as e:
-                                supervisor._log_error(
-                                    f'ERROR stopping behavior tree for AGENT [{agent_id}]: '
-                                    f'{type(e).__name__}: {e}\n{traceback.format_exc()}'
-                                )
-                        # THEN: Cancel the agent's coroutine AFTER stopping the BT
-                        if running_agent.event_loop is not None:
-                            running_agent.event_loop.call_soon_threadsafe(
-                                running_agent.coroutine_handler.cancel
-                            )
-                        else:
-                            running_agent.coroutine_handler.cancel()
-                        supervisor.running_agents_list.remove(running_agent)
-                        # Create finished agent state with FAILURE due to cancellation
-                        finished_state = FinishedAgentsState(
-                            agent_id=agent_id,
-                            input_prompt=query,
-                            agent_result='Agent execution was cancelled by supervisor.',
-                            status=AgentStatus.FAILURE
-                        )
-                        supervisor.finished_agents_list.append(finished_state)
-                        message = (
-                            f'Agent {agent_id} deleted successfully '
-                            f'(was working on: {query})'
-                        )
-                        break
+                target = next(
+                    (a for a in supervisor.running_agents_list
+                     if a.agent_id == agent_id),
+                    None
+                )
 
+            if target is None:
+                message = f'Error: Agent {agent_id} not found in running agents'
+                supervisor._log_info(message)
+                return message
+
+            query = target.input_prompt
+
+            # Phase 2: Perform network I/O WITHOUT holding the lock
+            # Stop the behavior tree via MCP client BEFORE cancelling
+            if supervisor.ollama_agent.mcp_client is not None:
+                try:
+                    supervisor._log_info(
+                        'Stopping behavior tree via MCP client...')
+                    # Use run_coroutine_threadsafe since the loop is running
+                    stop_future = asyncio.run_coroutine_threadsafe(
+                        supervisor.ollama_agent.mcp_client.call_tool(
+                            'stop_behavior_tree',
+                            arguments={'execution_id': str(agent_id)}
+                        ),
+                        target.event_loop
+                    )
+                    result = stop_future.result(timeout=8.0)
+                    supervisor._log_info(
+                        f'Behavior tree stopped successfully. Result: {result}'
+                    )
+                except Exception as e:
+                    supervisor._log_error(
+                        f'ERROR stopping behavior tree for AGENT [{agent_id}]: '
+                        f'{type(e).__name__}: {e}\n{traceback.format_exc()}'
+                    )
+
+            # Cancel the agent's coroutine AFTER stopping the BT
+            if target.event_loop is not None:
+                target.event_loop.call_soon_threadsafe(
+                    target.coroutine_handler.cancel
+                )
+            else:
+                target.coroutine_handler.cancel()
+
+            # Phase 3: Update lists under lock (fast mutation only)
+            with supervisor.agent_lists_lock:
+                supervisor.running_agents_list = [
+                    a for a in supervisor.running_agents_list
+                    if a.agent_id != agent_id
+                ]
+                # Create finished agent state with FAILURE due to cancellation
+                finished_state = FinishedAgentsState(
+                    agent_id=agent_id,
+                    input_prompt=query,
+                    agent_result='Agent execution was cancelled by supervisor.',
+                    status=AgentStatus.FAILURE
+                )
+                supervisor.finished_agents_list.append(finished_state)
+
+            message = (
+                f'Agent {agent_id} deleted successfully '
+                f'(was working on: {query})'
+            )
             supervisor._log_info(message)
             return message
 
