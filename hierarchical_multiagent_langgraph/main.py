@@ -197,30 +197,12 @@ class HierarchicalMultiagent(LangGraphRosBase):
 
         self.get_logger().info('SupervisorManager graph created successfully...')
 
-    def _process_graph_async(self, input_state: InputState, thread_id: str) -> None:
+    def _process_graph(self, input_state: InputState, thread_id: str) -> None:
         """
-        Asynchronously invoke supervisor's graph without blocking caller.
+        Invoke supervisor's graph synchronously, blocking the calling thread.
 
-        Fire-and-forget execution: submits supervisor task and returns immediately.
-        Supervisor operates concurrently with other ROS2 callbacks. Results printed
-        to console after completion. Used when ROS2 caller doesn't need response
-        (response_needed=False in service call).
-
-        Execution Model:
-            - Invokes graph.ainvoke() but doesn't wait for completion
-            - Supervisor runs in main event loop background
-            - Caller returns immediately with acknowledgment
-            - Results logged/printed after supervisor finishes
-
-        Use Cases:
-            - Fire-and-forget queries: "turn on the light" (no response needed)
-            - Background tasks: data processing, monitoring without user wait
-            - Reduce latency: ROS2 callback can return quickly to executor
-
-        Limitation:
-            - Caller receives no direct result (only asynchronous console output)
-            - No error feedback to caller (errors logged only)
-            - Task runs but completion not guaranteed to caller
+        Submits the supervisor task to the event loop and blocks until completion.
+        Results are logged to console after processing finishes.
 
         Parameters:
             input_state (InputState): Initial state with 'user_prompt'.
@@ -228,24 +210,18 @@ class HierarchicalMultiagent(LangGraphRosBase):
             thread_id (str): Checkpoint thread identifier for state persistence.
 
         Returns:
-            None: Returns immediately; actual processing continues in background.
+            None
 
         Side Effects:
-            - Submits supervisor task to event loop
-            - Prints result to console (not returned to ROS2 caller)
+            - Blocks calling thread until graph execution completes
+            - Logs result/errors to console (not returned to ROS2 caller)
             - May trigger agent creation/execution in background
-            - Updates supervisor_manager agent lists during background execution
-
-        Note:
-            This implementation still blocks via run_until_complete().
-            For true non-blocking behavior, use asyncio.create_task() instead,
-            but this requires careful exception handling for background tasks.
+            - Updates supervisor_manager agent lists during execution
         """
         config = {'configurable': {'thread_id': thread_id}}
         self.loop.run_until_complete(
             self.supervisor_manager.graph.ainvoke(input_state, config=config)
         )
-        # print(f'Asynchronous processing result: {result}')
 
     def agent_callback(self, request, response):
         """
@@ -265,7 +241,7 @@ class HierarchicalMultiagent(LangGraphRosBase):
             2. Log incoming query at DEBUG level
             3. Create InputState dictionary with user_prompt key
             4. Set fixed thread_id='supervisor' for checkpoint context
-            5. Call _process_graph_async(input_state, thread_id)
+            5. Call _process_graph(input_state, thread_id)
             6. Return immediately with success message
             7. Supervisor processes graph in background (may create agents, execute tools)
             8. Results logged/printed but not returned to caller
@@ -316,7 +292,7 @@ class HierarchicalMultiagent(LangGraphRosBase):
 
         # Process graph
         self.get_logger().info('Processing query asynchronously...')
-        self._process_graph_async(input_state, thread_id)
+        self._process_graph(input_state, thread_id)
         response.agent_response = 'Query submitted for processing'
 
         self.get_logger().info('Query processing submitted; returning response to caller.')
