@@ -471,6 +471,7 @@ def main(args=None) -> None:
     """
     rclpy.init(args=args)
 
+    agent = None
     try:
         # Create the agent node
         agent = HierarchicalMultiagent()
