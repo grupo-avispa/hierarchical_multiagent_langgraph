@@ -1,0 +1,711 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hierarchical Multiagent System - Animated Flow</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+  :root, [data-theme="dark"] {
+    --bg: #0f1117;
+    --bg-card: #1a1d27;
+    --bg-card-hover: #222633;
+    --border: #2a2f3e;
+    --text: #e4e4e7;
+    --text-dim: #9ca3af;
+    --user: #3b82f6;
+    --user-glow: rgba(59, 130, 246, 0.4);
+    --ros: #f59e0b;
+    --ros-glow: rgba(245, 158, 11, 0.3);
+    --supervisor: #8b5cf6;
+    --supervisor-glow: rgba(139, 92, 246, 0.3);
+    --llm: #ef4444;
+    --llm-glow: rgba(239, 68, 68, 0.3);
+    --tool: #10b981;
+    --tool-glow: rgba(16, 185, 129, 0.3);
+    --agent: #f97316;
+    --agent-glow: rgba(249, 115, 22, 0.3);
+    --mcp: #06b6d4;
+    --mcp-glow: rgba(6, 182, 212, 0.3);
+    --result: #a855f7;
+    --result-glow: rgba(168, 85, 247, 0.3);
+    --queue: #6366f1;
+    --queue-glow: rgba(99, 102, 241, 0.3);
+    --success: #22c55e;
+    --arrow: #4b5563;
+  }
+
+  [data-theme="light"] {
+    --bg: #f8f9fc;
+    --bg-card: #ffffff;
+    --bg-card-hover: #f0f1f5;
+    --border: #d1d5db;
+    --text: #1f2937;
+    --text-dim: #6b7280;
+    --user: #2563eb;
+    --user-glow: rgba(37, 99, 235, 0.25);
+    --ros: #d97706;
+    --ros-glow: rgba(217, 119, 6, 0.2);
+    --supervisor: #7c3aed;
+    --supervisor-glow: rgba(124, 58, 237, 0.2);
+    --llm: #dc2626;
+    --llm-glow: rgba(220, 38, 38, 0.2);
+    --tool: #059669;
+    --tool-glow: rgba(5, 150, 105, 0.2);
+    --agent: #ea580c;
+    --agent-glow: rgba(234, 88, 12, 0.2);
+    --mcp: #0891b2;
+    --mcp-glow: rgba(8, 145, 178, 0.2);
+    --result: #9333ea;
+    --result-glow: rgba(147, 51, 234, 0.2);
+    --queue: #4f46e5;
+    --queue-glow: rgba(79, 70, 229, 0.2);
+    --success: #16a34a;
+    --arrow: #9ca3af;
+  }
+  [data-theme="light"] .node .label { color: var(--text); }
+  [data-theme="light"] .header h1 { filter: brightness(0.85); }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Inter', sans-serif;
+    min-height: 100vh;
+    overflow-x: hidden;
+    transition: background 0.4s ease, color 0.4s ease;
+  }
+
+  .header {
+    text-align: center;
+    padding: 24px 20px 8px;
+  }
+  .header h1 {
+    font-size: 1.5rem;
+    font-weight: 800;
+    background: linear-gradient(135deg, var(--supervisor), var(--mcp));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    letter-spacing: -0.5px;
+  }
+  .header .subtitle {
+    color: var(--text-dim);
+    font-size: 0.8rem;
+    margin-top: 5px;
+    font-family: 'JetBrains Mono', monospace;
+  }
+
+  .controls {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px;
+    flex-wrap: wrap;
+  }
+  .btn {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    font-weight: 600;
+    padding: 7px 16px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg-card);
+    color: var(--text);
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .btn:hover { background: var(--bg-card-hover); border-color: var(--supervisor); }
+  .btn.active { background: var(--supervisor); border-color: var(--supervisor); color: #fff; }
+  .btn-play { border-color: var(--success); }
+  .btn-play:hover, .btn-play.active { background: var(--success); border-color: var(--success); }
+
+  .step-indicator {
+    display: flex;
+    justify-content: center;
+    gap: 5px;
+    padding: 0 20px 14px;
+    flex-wrap: wrap;
+  }
+  .step-dot {
+    width: 30px;
+    height: 5px;
+    border-radius: 3px;
+    background: var(--border);
+    transition: all 0.5s ease;
+    cursor: pointer;
+  }
+  .step-dot.active { background: var(--supervisor); box-shadow: 0 0 10px var(--supervisor-glow); }
+  .step-dot.done { background: var(--success); }
+
+  .step-desc-container {
+    text-align: center;
+    min-height: 50px;
+    padding: 0 20px 10px;
+  }
+  .step-desc {
+    display: inline-block;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 9px 22px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.74rem;
+    color: var(--text);
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity 0.4s, transform 0.4s;
+    max-width: 720px;
+  }
+  .step-desc.visible { opacity: 1; transform: translateY(0); }
+  .step-desc .step-num { color: var(--supervisor); font-weight: 700; }
+
+  /* ===== CANVAS ===== */
+  .canvas {
+    position: relative;
+    width: 1060px;
+    max-width: 96vw;
+    height: 760px;
+    margin: 0 auto 30px;
+  }
+
+  /* ===== NODES ===== */
+  .node {
+    position: absolute;
+    border-radius: 12px;
+    border: 1.5px solid var(--border);
+    background: var(--bg-card);
+    padding: 10px 14px;
+    text-align: center;
+    opacity: 0;
+    transform: scale(0.7) translateY(12px);
+    transition: opacity 0.5s ease, transform 0.5s ease, box-shadow 0.4s ease, border-color 0.4s ease, background 0.4s ease;
+    z-index: 2;
+  }
+  .node.visible { opacity: 1; transform: scale(1) translateY(0); }
+  .node.highlight { z-index: 5; }
+  .node .icon { font-size: 1.3rem; margin-bottom: 3px; }
+  .node .label { font-weight: 700; font-size: 0.75rem; margin-bottom: 2px; white-space: nowrap; }
+  .node .desc { font-family: 'JetBrains Mono', monospace; font-size: 0.58rem; color: var(--text-dim); line-height: 1.35; }
+
+  .node.user { border-color: var(--user); }
+  .node.user.highlight { box-shadow: 0 0 24px var(--user-glow); border-color: var(--user); }
+  .node.ros { border-color: var(--ros); }
+  .node.ros.highlight { box-shadow: 0 0 24px var(--ros-glow); border-color: var(--ros); }
+  .node.supervisor { border-color: var(--supervisor); }
+  .node.supervisor.highlight { box-shadow: 0 0 24px var(--supervisor-glow); border-color: var(--supervisor); }
+  .node.llm { border-color: var(--llm); }
+  .node.llm.highlight { box-shadow: 0 0 24px var(--llm-glow); border-color: var(--llm); }
+  .node.tool { border-color: var(--tool); }
+  .node.tool.highlight { box-shadow: 0 0 24px var(--tool-glow); border-color: var(--tool); }
+  .node.agent { border-color: var(--agent); }
+  .node.agent.highlight { box-shadow: 0 0 24px var(--agent-glow); border-color: var(--agent); }
+  .node.mcp { border-color: var(--mcp); }
+  .node.mcp.highlight { box-shadow: 0 0 24px var(--mcp-glow); border-color: var(--mcp); }
+  .node.result { border-color: var(--result); }
+  .node.result.highlight { box-shadow: 0 0 24px var(--result-glow); border-color: var(--result); }
+  .node.queue { border-color: var(--queue); }
+  .node.queue.highlight { box-shadow: 0 0 24px var(--queue-glow); border-color: var(--queue); }
+
+  /* ===== ARROWS ===== */
+  svg.arrows {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    z-index: 1; pointer-events: none;
+  }
+  .arrow-path {
+    fill: none; stroke: var(--arrow); stroke-width: 2;
+    stroke-dasharray: 1200; stroke-dashoffset: 1200;
+    transition: stroke 0.4s;
+  }
+  .arrow-path.visible { animation: drawArrow 0.7s ease forwards; }
+  .arrow-path.highlight { stroke: var(--supervisor); stroke-width: 2.5; filter: drop-shadow(0 0 4px var(--supervisor-glow)); }
+  @keyframes drawArrow { to { stroke-dashoffset: 0; } }
+
+  .particle { r: 4; fill: var(--supervisor); filter: drop-shadow(0 0 6px var(--supervisor)); opacity: 0; }
+  .particle.animate { opacity: 1; }
+
+  /* ===== GROUPS ===== */
+  .group-box {
+    position: absolute;
+    border: 1.5px dashed;
+    border-radius: 16px;
+    opacity: 0;
+    transition: opacity 0.6s ease;
+    z-index: 0;
+  }
+  .group-box.visible { opacity: 1; }
+  .group-box .group-title {
+    position: absolute;
+    top: -11px; left: 18px;
+    background: var(--bg);
+    padding: 1px 10px;
+    font-size: 0.62rem;
+    font-weight: 700;
+    color: var(--text-dim);
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    border-radius: 4px;
+    transition: background 0.4s;
+  }
+
+  @keyframes pulseRing {
+    0% { box-shadow: 0 0 0 0 var(--supervisor-glow); }
+    70% { box-shadow: 0 0 0 10px transparent; }
+    100% { box-shadow: 0 0 0 0 transparent; }
+  }
+  .node.pulse { animation: pulseRing 1s ease-out; }
+
+  .speed-label {
+    font-family: 'JetBrains Mono', monospace; font-size: 0.68rem;
+    color: var(--text-dim); display: flex; align-items: center; gap: 5px;
+  }
+  .speed-label select {
+    background: var(--bg-card); color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 4px 8px; font-family: inherit; font-size: 0.68rem;
+  }
+
+  .theme-toggle {
+    font-family: 'JetBrains Mono', monospace; font-size: 0.72rem; font-weight: 600;
+    padding: 7px 14px; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--bg-card); color: var(--text); cursor: pointer;
+    transition: all 0.3s; display: flex; align-items: center; gap: 5px;
+  }
+  .theme-toggle:hover { background: var(--bg-card-hover); border-color: var(--ros); }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Hierarchical Multiagent LangGraph System</h1>
+  <div class="subtitle">Query: "Move to the bedroom" → Supervisor → Agent → BT Execution</div>
+</div>
+
+<div class="controls">
+  <button class="btn btn-play" id="btnPlay" onclick="playAnimation()">▶ Play</button>
+  <button class="btn" id="btnPause" onclick="pauseAnimation()">⏸ Pause</button>
+  <button class="btn" id="btnReset" onclick="resetAnimation()">↺ Reset</button>
+  <button class="btn" id="btnPrev" onclick="prevStep()">◀ Prev</button>
+  <button class="btn" id="btnNext" onclick="nextStep()">Next ▶</button>
+  <span class="speed-label">Speed:
+    <select id="speedSelect" onchange="updateSpeed()">
+      <option value="3000">Slow</option>
+      <option value="1800" selected>Normal</option>
+      <option value="900">Fast</option>
+    </select>
+  </span>
+  <button class="theme-toggle" id="btnTheme" onclick="toggleTheme()">
+    <span id="themeIcon">🌙</span> Dark
+  </button>
+</div>
+
+<div class="step-indicator" id="stepIndicator"></div>
+<div class="step-desc-container"><div class="step-desc" id="stepDesc"></div></div>
+
+<!-- ===================== CANVAS ===================== -->
+<div class="canvas" id="canvas">
+
+  <!-- ===== GROUP BOXES ===== -->
+  <div class="group-box" id="grpRos"
+       style="left:218px; top:6px; width:430px; height:102px; border-color:var(--ros);">
+    <span class="group-title" style="color:var(--ros);">🤖 ROS2 NODE</span>
+  </div>
+
+  <div class="group-box" id="grpSupervisor"
+       style="left:28px; top:140px; width:730px; height:108px; border-color:var(--supervisor);">
+    <span class="group-title" style="color:var(--supervisor);">📊 SUPERVISOR LANGGRAPH</span>
+  </div>
+
+  <div class="group-box" id="grpAgent"
+       style="left:28px; top:430px; width:660px; height:118px; border-color:var(--agent);">
+    <span class="group-title" style="color:var(--agent);">🧩 AGENT (ID: 1) — DEDICATED THREAD</span>
+  </div>
+
+  <!-- ===== NODES ===== -->
+
+  <!-- Row 0: User (outside ROS2 group) -->
+  <div class="node user" id="nUser" style="left:12px; top:22px; width:160px;">
+    <div class="icon">🧑</div>
+    <div class="label">User Query</div>
+    <div class="desc">"Move to the bedroom"</div>
+  </div>
+
+  <!-- Row 0: ROS2 nodes (inside grpRos: 218+22=240 ... 218+430-22=626) -->
+  <div class="node ros" id="nService" style="left:240px; top:24px; width:160px;">
+    <div class="icon">📡</div>
+    <div class="label">CallAgent Service</div>
+    <div class="desc">agent_callback()</div>
+  </div>
+  <div class="node ros" id="nTimer" style="left:446px; top:24px; width:178px;">
+    <div class="icon">⏱️</div>
+    <div class="label">Timer Callback 1.0s</div>
+    <div class="desc">consume_pending_agents()</div>
+  </div>
+
+  <!-- Row 1: Supervisor nodes (inside grpSupervisor: 28+20=48 ... 28+730-20=738) -->
+  <div class="node supervisor" id="nInit" style="left:48px; top:166px; width:172px;">
+    <div class="icon">1️⃣</div>
+    <div class="label">Init Messages</div>
+    <div class="desc">system prompt + query</div>
+  </div>
+  <div class="node llm" id="nAnalyze" style="left:240px; top:166px; width:148px;">
+    <div class="icon">🧠</div>
+    <div class="label">Analyze Task</div>
+    <div class="desc">LLM decides action</div>
+  </div>
+  <div class="node supervisor" id="nRoute" style="left:408px; top:166px; width:160px;">
+    <div class="icon">🔀</div>
+    <div class="label">Route</div>
+    <div class="desc">tool call → finish</div>
+  </div>
+  <div class="node result" id="nFinalize" style="left:588px; top:166px; width:148px;">
+    <div class="icon">✅</div>
+    <div class="label">Finalize</div>
+    <div class="desc">log agents & reset</div>
+  </div>
+
+  <!-- Row 2: Tool + Queue (between groups, free floating) -->
+  <div class="node tool" id="nCreate" style="left:192px; top:298px; width:210px;">
+    <div class="icon">🛠️</div>
+    <div class="label">create_agent(query)</div>
+    <div class="desc">ID: 1, "Navigate to bedroom"</div>
+  </div>
+  <div class="node queue" id="nPending" style="left:510px; top:298px; width:170px;">
+    <div class="icon">📋</div>
+    <div class="label">Pending Queue</div>
+    <div class="desc">AgentTask enqueued</div>
+  </div>
+
+  <!-- Row 3: Agent nodes (inside grpAgent: 28+20=48 ... 28+660-20=668) -->
+  <div class="node agent" id="nAgentQR" style="left:48px; top:456px; width:168px;">
+    <div class="icon">🧠</div>
+    <div class="label">query_response</div>
+    <div class="desc">LLM reasoning + MCP</div>
+  </div>
+  <div class="node agent" id="nAgentMS" style="left:266px; top:456px; width:154px;">
+    <div class="icon">🔄</div>
+    <div class="label">manage_steps</div>
+    <div class="desc">steps &lt; max_steps?</div>
+  </div>
+  <div class="node result" id="nAgentFinish" style="left:470px; top:456px; width:148px;">
+    <div class="icon">🏁</div>
+    <div class="label">Finish Agent</div>
+    <div class="desc">SUCCESS / FAILURE</div>
+  </div>
+
+  <!-- Row 4: MCP / BT (below agent group) -->
+  <div class="node mcp" id="nMCP" style="left:48px; top:600px; width:218px;">
+    <div class="icon">🌐</div>
+    <div class="label">MCP Server</div>
+    <div class="desc">execute_behavior_tree</div>
+  </div>
+  <div class="node mcp" id="nBT" style="left:338px; top:600px; width:290px;">
+    <div class="icon">🌳</div>
+    <div class="label">Behavior Tree Execution</div>
+    <div class="desc">name: navigate_to_pose, goal: bedroom</div>
+  </div>
+
+  <!-- Result store (right side) -->
+  <div class="node result" id="nResult" style="left:770px; top:456px; width:168px;">
+    <div class="icon">📦</div>
+    <div class="label">Finished List</div>
+    <div class="desc">result + status stored</div>
+  </div>
+
+  <!-- ===== ARROWS SVG ===== -->
+  <!--
+    Node centers (approx):
+    nUser:        92, 58    (left:12  w:160 → cx=92,   top:22  h~72 → cy=58)
+    nService:     320, 60   (left:240 w:160 → cx=320,  top:24  h~72 → cy=60)
+    nTimer:       535, 60   (left:446 w:178 → cx=535,  top:24  h~72 → cy=60)
+    nInit:        134, 200  (left:48  w:172 → cx=134,  top:166 h~68 → cy=200)
+    nAnalyze:     314, 200  (left:240 w:148 → cx=314,  top:166 h~68 → cy=200)
+    nRoute:       488, 200  (left:408 w:160 → cx=488,  top:166 h~68 → cy=200)
+    nFinalize:    662, 200  (left:588 w:148 → cx=662,  top:166 h~68 → cy=200)
+    nCreate:      297, 332  (left:192 w:210 → cx=297,  top:298 h~68 → cy=332)
+    nPending:     595, 332  (left:510 w:170 → cx=595,  top:298 h~68 → cy=332)
+    nAgentQR:     132, 490  (left:48  w:168 → cx=132,  top:456 h~68 → cy=490)
+    nAgentMS:     343, 490  (left:266 w:154 → cx=343,  top:456 h~68 → cy=490)
+    nAgentFinish: 544, 490  (left:470 w:148 → cx=544,  top:456 h~68 → cy=490)
+    nMCP:         157, 636  (left:48  w:218 → cx=157,  top:600 h~72 → cy=636)
+    nBT:          483, 636  (left:338 w:290 → cx=483,  top:600 h~72 → cy=636)
+    nResult:      854, 490  (left:770 w:168 → cx=854,  top:456 h~68 → cy=490)
+  -->
+  <svg class="arrows" id="arrowsSvg" viewBox="0 0 1060 760">
+    <defs>
+      <marker id="ah" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+        <polygon points="0 0, 8 3, 0 6" fill="var(--arrow)"/>
+      </marker>
+    </defs>
+
+    <!-- A0: User (right edge 172) → Service (left edge 240) -->
+    <path id="a0" class="arrow-path" d="M172,58 L238,60" marker-end="url(#ah)"/>
+    <circle class="particle" id="p0"><animateMotion dur="0.5s" fill="freeze" path="M172,58 L238,60"/></circle>
+
+    <!-- A1: Service (bottom 96) → down → left → Init (top 166) -->
+    <path id="a1" class="arrow-path" d="M320,96 L320,130 L134,130 L134,164" marker-end="url(#ah)"/>
+    <circle class="particle" id="p1"><animateMotion dur="0.6s" fill="freeze" path="M320,96 L320,130 L134,130 L134,164"/></circle>
+
+    <!-- A2: Init (right 220) → Analyze (left 240) -->
+    <path id="a2" class="arrow-path" d="M220,200 L238,200" marker-end="url(#ah)"/>
+    <circle class="particle" id="p2"><animateMotion dur="0.4s" fill="freeze" path="M220,200 L238,200"/></circle>
+
+    <!-- A3: Analyze (right 388) → Route (left 408) -->
+    <path id="a3" class="arrow-path" d="M388,200 L406,200" marker-end="url(#ah)"/>
+    <circle class="particle" id="p3"><animateMotion dur="0.4s" fill="freeze" path="M388,200 L406,200"/></circle>
+
+    <!-- A4: Analyze (bottom 234) ↓ Create (top 298) — dashed tool call -->
+    <path id="a4" class="arrow-path" d="M314,234 L297,296" marker-end="url(#ah)" stroke-dasharray="6,4"/>
+    <circle class="particle" id="p4"><animateMotion dur="0.5s" fill="freeze" path="M314,234 L297,296"/></circle>
+
+    <!-- A5: Create (right 402) → Pending (left 510) -->
+    <path id="a5" class="arrow-path" d="M402,332 L508,332" marker-end="url(#ah)"/>
+    <circle class="particle" id="p5"><animateMotion dur="0.5s" fill="freeze" path="M402,332 L508,332"/></circle>
+
+    <!-- A6: Route (right 568) → Finalize (left 588) -->
+    <path id="a6" class="arrow-path" d="M568,200 L586,200" marker-end="url(#ah)"/>
+    <circle class="particle" id="p6"><animateMotion dur="0.4s" fill="freeze" path="M568,200 L586,200"/></circle>
+
+    <!-- A7: Timer (bottom 96) → down → right → Pending (top 298) — dashed -->
+    <path id="a7" class="arrow-path" d="M535,96 L535,130 L595,130 L595,296" marker-end="url(#ah)" stroke-dasharray="6,4"/>
+    <circle class="particle" id="p7"><animateMotion dur="0.6s" fill="freeze" path="M535,96 L535,130 L595,130 L595,296"/></circle>
+
+    <!-- A8: Pending (bottom 366) → down → left → AgentQR (top 456) -->
+    <path id="a8" class="arrow-path" d="M595,366 L595,410 L132,410 L132,454" marker-end="url(#ah)"/>
+    <circle class="particle" id="p8"><animateMotion dur="0.6s" fill="freeze" path="M595,366 L595,410 L132,410 L132,454"/></circle>
+
+    <!-- A9: AgentQR (right 216) → AgentMS (left 266) -->
+    <path id="a9" class="arrow-path" d="M216,490 L264,490" marker-end="url(#ah)"/>
+    <circle class="particle" id="p9"><animateMotion dur="0.4s" fill="freeze" path="M216,490 L264,490"/></circle>
+
+    <!-- A10: AgentQR (bottom 524) ↓ MCP (top 600) — dashed tool call -->
+    <path id="a10" class="arrow-path" d="M132,524 L132,598" marker-end="url(#ah)" stroke-dasharray="6,4"/>
+    <circle class="particle" id="p10"><animateMotion dur="0.5s" fill="freeze" path="M132,524 L132,598"/></circle>
+
+    <!-- A11: MCP (right 266) → BT (left 338) -->
+    <path id="a11" class="arrow-path" d="M266,636 L336,636" marker-end="url(#ah)"/>
+    <circle class="particle" id="p11"><animateMotion dur="0.4s" fill="freeze" path="M266,636 L336,636"/></circle>
+
+    <!-- A12: AgentMS (bottom 524) → loop back to AgentQR — dashed -->
+    <path id="a12" class="arrow-path" d="M343,524 L343,556 L132,556 L132,524" marker-end="url(#ah)" stroke-dasharray="6,4"/>
+    <circle class="particle" id="p12"><animateMotion dur="0.6s" fill="freeze" path="M343,524 L343,556 L132,556 L132,524"/></circle>
+
+    <!-- A13: AgentMS (right 420) → AgentFinish (left 470) -->
+    <path id="a13" class="arrow-path" d="M420,490 L468,490" marker-end="url(#ah)"/>
+    <circle class="particle" id="p13"><animateMotion dur="0.4s" fill="freeze" path="M420,490 L468,490"/></circle>
+
+    <!-- A14: AgentFinish (right 618) → Result (left 770) -->
+    <path id="a14" class="arrow-path" d="M618,490 L768,490" marker-end="url(#ah)"/>
+    <circle class="particle" id="p14"><animateMotion dur="0.5s" fill="freeze" path="M618,490 L768,490"/></circle>
+  </svg>
+</div>
+
+<script>
+const STEPS = [
+  {
+    desc: '<span class="step-num">Step 1</span> — User sends query <b>"Move to the bedroom"</b> via ROS2 service call',
+    show: ['nUser'], highlight: ['nUser'], arrows: [], groups: []
+  },
+  {
+    desc: '<span class="step-num">Step 2</span> — <b>CallAgent</b> service receives the query in <code>agent_callback()</code>',
+    show: ['nUser','nService','nTimer'], highlight: ['nService'],
+    arrows: ['a0'], particles: ['p0'], groups: ['grpRos']
+  },
+  {
+    desc: '<span class="step-num">Step 3</span> — Query forwarded to <b>Supervisor LangGraph</b>: system prompt rendered with agents context',
+    show: ['nUser','nService','nTimer','nInit'], highlight: ['nInit'],
+    arrows: ['a0','a1'], particles: ['p1'], groups: ['grpRos','grpSupervisor']
+  },
+  {
+    desc: '<span class="step-num">Step 4</span> — <b>analyze_task</b>: LLM (Ollama) reasons about the query and decides to create an agent',
+    show: ['nUser','nService','nTimer','nInit','nAnalyze'], highlight: ['nAnalyze'],
+    arrows: ['a0','a1','a2'], particles: ['p2'], groups: ['grpRos','grpSupervisor']
+  },
+  {
+    desc: '<span class="step-num">Step 5</span> — LLM calls tool <b>create_agent</b>(query: "Navigate to the bedroom") → Agent ID: 1',
+    show: ['nUser','nService','nTimer','nInit','nAnalyze','nCreate'], highlight: ['nCreate'],
+    arrows: ['a0','a1','a2','a4'], particles: ['p4'], groups: ['grpRos','grpSupervisor']
+  },
+  {
+    desc: '<span class="step-num">Step 6</span> — Agent task <b>enqueued</b> in pending_agents_list (producer-consumer pattern)',
+    show: ['nUser','nService','nTimer','nInit','nAnalyze','nCreate','nPending'], highlight: ['nPending'],
+    arrows: ['a0','a1','a2','a4','a5'], particles: ['p5'], groups: ['grpRos','grpSupervisor']
+  },
+  {
+    desc: '<span class="step-num">Step 7</span> — <b>route_on_tool_call</b>: tool call detected → route to <b>finalize_conversation</b>',
+    show: ['nUser','nService','nTimer','nInit','nAnalyze','nCreate','nPending','nRoute','nFinalize'],
+    highlight: ['nRoute','nFinalize'],
+    arrows: ['a0','a1','a2','a3','a4','a5','a6'], particles: ['p3','p6'],
+    groups: ['grpRos','grpSupervisor']
+  },
+  {
+    desc: '<span class="step-num">Step 8</span> — Timer callback <b>consumes</b> pending agent → spawns <b>dedicated thread</b> + event loop',
+    show: ['nUser','nService','nTimer','nInit','nAnalyze','nCreate','nPending','nRoute','nFinalize'],
+    highlight: ['nTimer','nPending'],
+    arrows: ['a0','a1','a2','a3','a4','a5','a6','a7'], particles: ['p7'],
+    groups: ['grpRos','grpSupervisor']
+  },
+  {
+    desc: '<span class="step-num">Step 9</span> — <b>Agent (ID: 1)</b> starts: MCP setup → tool retrieval → graph build → execute',
+    show: ['nUser','nService','nTimer','nInit','nAnalyze','nCreate','nPending','nRoute','nFinalize','nAgentQR'],
+    highlight: ['nAgentQR'],
+    arrows: ['a0','a1','a2','a3','a4','a5','a6','a7','a8'], particles: ['p8'],
+    groups: ['grpRos','grpSupervisor','grpAgent']
+  },
+  {
+    desc: '<span class="step-num">Step 10</span> — Agent\'s LLM calls <b>execute_behavior_tree</b> via MCP server',
+    show: ['nUser','nService','nTimer','nInit','nAnalyze','nCreate','nPending','nRoute','nFinalize','nAgentQR','nAgentMS','nMCP'],
+    highlight: ['nAgentQR','nMCP'],
+    arrows: ['a0','a1','a2','a3','a4','a5','a6','a7','a8','a9','a10'], particles: ['p10'],
+    groups: ['grpRos','grpSupervisor','grpAgent']
+  },
+  {
+    desc: '<span class="step-num">Step 11</span> — <b>BT executed</b>: navigate_to_pose(goal: "bedroom") running on the robot 🤖',
+    show: ['nUser','nService','nTimer','nInit','nAnalyze','nCreate','nPending','nRoute','nFinalize','nAgentQR','nAgentMS','nMCP','nBT'],
+    highlight: ['nBT'],
+    arrows: ['a0','a1','a2','a3','a4','a5','a6','a7','a8','a9','a10','a11'], particles: ['p11'],
+    groups: ['grpRos','grpSupervisor','grpAgent']
+  },
+  {
+    desc: '<span class="step-num">Step 12</span> — <b>manage_steps</b>: result received, no more tool calls → route to <b>finish</b>',
+    show: ['nUser','nService','nTimer','nInit','nAnalyze','nCreate','nPending','nRoute','nFinalize','nAgentQR','nAgentMS','nMCP','nBT','nAgentFinish'],
+    highlight: ['nAgentMS','nAgentFinish'],
+    arrows: ['a0','a1','a2','a3','a4','a5','a6','a7','a8','a9','a10','a11','a13'], particles: ['p13'],
+    groups: ['grpRos','grpSupervisor','grpAgent']
+  },
+  {
+    desc: '<span class="step-num">Step 13</span> — Agent <b>SUCCESS</b> ✅ → result stored in <b>finished_agents_list</b>',
+    show: ['nUser','nService','nTimer','nInit','nAnalyze','nCreate','nPending','nRoute','nFinalize','nAgentQR','nAgentMS','nMCP','nBT','nAgentFinish','nResult'],
+    highlight: ['nResult'],
+    arrows: ['a0','a1','a2','a3','a4','a5','a6','a7','a8','a9','a10','a11','a13','a14'], particles: ['p14'],
+    groups: ['grpRos','grpSupervisor','grpAgent']
+  },
+];
+
+let currentStep = -1, playing = false, playInterval = null, speed = 1800;
+
+const indicatorEl = document.getElementById('stepIndicator');
+STEPS.forEach((_, i) => {
+  const d = document.createElement('div');
+  d.className = 'step-dot'; d.id = `dot${i}`;
+  d.onclick = () => goToStep(i);
+  indicatorEl.appendChild(d);
+});
+
+function updateSpeed() {
+  speed = parseInt(document.getElementById('speedSelect').value);
+  if (playing) { clearInterval(playInterval); playInterval = setInterval(() => nextStep(), speed); }
+}
+
+function hideAll() {
+  document.querySelectorAll('.node').forEach(n => n.classList.remove('visible','highlight','pulse'));
+  document.querySelectorAll('.arrow-path').forEach(a => { a.classList.remove('visible','highlight'); a.style.strokeDashoffset = '1200'; });
+  document.querySelectorAll('.particle').forEach(p => p.classList.remove('animate'));
+  document.querySelectorAll('.group-box').forEach(g => g.classList.remove('visible'));
+  document.querySelectorAll('.step-dot').forEach(d => d.classList.remove('active','done'));
+  document.getElementById('stepDesc').classList.remove('visible');
+}
+
+function goToStep(idx) {
+  if (idx < 0 || idx >= STEPS.length) return;
+  currentStep = idx;
+  const step = STEPS[idx];
+
+  document.querySelectorAll('.node').forEach(n => n.classList.remove('highlight','pulse'));
+  document.querySelectorAll('.arrow-path').forEach(a => a.classList.remove('highlight'));
+  document.querySelectorAll('.particle').forEach(p => p.classList.remove('animate'));
+  document.querySelectorAll('.group-box').forEach(g => g.classList.remove('visible'));
+
+  document.querySelectorAll('.node').forEach(n => {
+    step.show.includes(n.id) ? n.classList.add('visible') : n.classList.remove('visible');
+  });
+
+  (step.highlight || []).forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.classList.add('highlight','pulse');
+  });
+
+  document.querySelectorAll('.arrow-path').forEach(a => {
+    if (step.arrows && step.arrows.includes(a.id)) a.classList.add('visible');
+    else { a.classList.remove('visible'); a.style.strokeDashoffset = '1200'; }
+  });
+  if (step.arrows && step.arrows.length > 0) {
+    const last = document.getElementById(step.arrows[step.arrows.length - 1]);
+    if (last) last.classList.add('highlight');
+  }
+
+  if (step.particles) step.particles.forEach(pid => {
+    const p = document.getElementById(pid);
+    if (p) { p.classList.remove('animate'); void p.offsetWidth; p.classList.add('animate'); }
+  });
+
+  (step.groups || []).forEach(gid => { const g = document.getElementById(gid); if (g) g.classList.add('visible'); });
+
+  document.querySelectorAll('.step-dot').forEach((d, i) => {
+    d.classList.remove('active','done');
+    if (i < idx) d.classList.add('done');
+    if (i === idx) d.classList.add('active');
+  });
+
+  const descEl = document.getElementById('stepDesc');
+  descEl.innerHTML = step.desc;
+  descEl.classList.remove('visible'); void descEl.offsetWidth; descEl.classList.add('visible');
+}
+
+function nextStep() {
+  if (currentStep >= STEPS.length - 1) { if (playing) pauseAnimation(); return; }
+  goToStep(currentStep + 1);
+}
+function prevStep() { if (currentStep > 0) goToStep(currentStep - 1); }
+
+function playAnimation() {
+  if (playing) return;
+  playing = true;
+  document.getElementById('btnPlay').classList.add('active');
+  if (currentStep >= STEPS.length - 1) resetAnimation();
+  playInterval = setInterval(() => { nextStep(); if (currentStep >= STEPS.length - 1) pauseAnimation(); }, speed);
+  if (currentStep < 0) nextStep();
+}
+function pauseAnimation() {
+  playing = false;
+  document.getElementById('btnPlay').classList.remove('active');
+  if (playInterval) { clearInterval(playInterval); playInterval = null; }
+}
+function resetAnimation() { pauseAnimation(); currentStep = -1; hideAll(); }
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'ArrowRight' || e.key === ' ') { e.preventDefault(); nextStep(); }
+  if (e.key === 'ArrowLeft') { e.preventDefault(); prevStep(); }
+  if (e.key === 'p' || e.key === 'Enter') { e.preventDefault(); playing ? pauseAnimation() : playAnimation(); }
+  if (e.key === 'r') { e.preventDefault(); resetAnimation(); }
+});
+
+function toggleTheme() {
+  const html = document.documentElement;
+  const btn = document.getElementById('btnTheme');
+  if (html.getAttribute('data-theme') === 'light') {
+    html.setAttribute('data-theme', 'dark');
+    btn.innerHTML = '<span id="themeIcon">🌙</span> Dark';
+    localStorage.setItem('theme', 'dark');
+  } else {
+    html.setAttribute('data-theme', 'light');
+    btn.innerHTML = '<span id="themeIcon">☀️</span> Light';
+    localStorage.setItem('theme', 'light');
+  }
+}
+(function() {
+  const saved = localStorage.getItem('theme');
+  if (saved === 'light') {
+    document.documentElement.setAttribute('data-theme', 'light');
+    setTimeout(() => {
+      const btn = document.getElementById('btnTheme');
+      if (btn) btn.innerHTML = '<span id="themeIcon">☀️</span> Light';
+    }, 0);
+  }
+})();
+
+setTimeout(() => playAnimation(), 600);
+</script>
+</body>
+</html>
