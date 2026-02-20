@@ -15,7 +15,7 @@ Key components:
 
 import asyncio
 from dataclasses import dataclass
-from threading import Lock
+from threading import Event, Lock
 
 from hierarchical_multiagent_langgraph.agent import AgentStatus, SinglePurposeAgent
 from langgraph_base_ros.chat_template_render import Messages
@@ -119,12 +119,14 @@ class AgentRegistry:
     """
 
     def __init__(self) -> None:
-        """Initialize the registry with empty lists and counter at 1."""
+        """Initialize the registry with empty lists, counter at 1, and pending event."""
         self._lock = Lock()
         self._pending: list[AgentTask] = []
         self._running: list[RunningAgentsState] = []
         self._finished: list[FinishedAgentsState] = []
         self._id_counter: int = 1
+        # Event signaled when new pending agents are available
+        self._pending_event = Event()
 
     def next_id(self) -> int:
         """
@@ -144,7 +146,10 @@ class AgentRegistry:
 
     def enqueue(self, task: AgentTask) -> None:
         """
-        Add a pending agent task to the queue.
+        Add a pending agent task to the queue and signal the consumer.
+
+        Appends the task under the lock and then sets the pending event
+        to wake any waiting consumer thread.
 
         Parameters
         ----------
@@ -153,6 +158,8 @@ class AgentRegistry:
         """
         with self._lock:
             self._pending.append(task)
+        # Signal the consumer thread that work is available
+        self._pending_event.set()
 
     def pop_pending(self) -> AgentTask | None:
         """
@@ -167,6 +174,36 @@ class AgentRegistry:
             if self._pending:
                 return self._pending.pop(0)
         return None
+
+    def wait_for_pending(self, timeout: float | None = None) -> bool:
+        """
+        Block until a pending agent is available or timeout expires.
+
+        Parameters
+        ----------
+        timeout : float | None
+            Maximum time to wait in seconds. None waits indefinitely.
+
+        Returns
+        -------
+        bool
+            True if the event was set (pending agent available),
+            False if the timeout expired.
+        """
+        return self._pending_event.wait(timeout=timeout)
+
+    def clear_pending_signal(self) -> None:
+        """Clear the pending signal after consuming pending agents."""
+        self._pending_event.clear()
+
+    def wake_pending(self) -> None:
+        """
+        Force-wake any thread waiting for pending agents.
+
+        Used during shutdown to unblock the consumer thread so it can
+        check the shutdown flag and exit cleanly.
+        """
+        self._pending_event.set()
 
     def add_running(self, state: RunningAgentsState) -> None:
         """

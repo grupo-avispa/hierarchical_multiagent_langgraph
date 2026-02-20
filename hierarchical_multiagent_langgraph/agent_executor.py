@@ -27,9 +27,10 @@ class AgentExecutor:
     """
     Manage async execution of SinglePurposeAgent instances in dedicated threads.
 
-    Handles the complete agent execution pipeline from setup through result
-    collection. Uses the AgentRegistry for thread-safe agent state tracking
-    and supports configurable timeouts to prevent infinite execution.
+    Uses an event-driven consumer pattern: a background thread waits on the
+    registry's pending event and spawns a new thread for each pending agent
+    when signaled. Replaces the previous polling-based timer approach for
+    lower latency and reduced resource usage.
 
     Attributes
     ----------
@@ -64,6 +65,10 @@ class AgentExecutor:
         self.registry = registry
         self.agent_timeout = agent_timeout
         self.logger = logger
+        # Shutdown flag for the consumer thread
+        self._shutdown_event = threading.Event()
+        # Background consumer thread reference
+        self._consumer_thread: threading.Thread | None = None
 
     def _log_info(self, msg: str) -> None:
         """Log info message using provided logger or Python logging."""
@@ -172,27 +177,101 @@ class AgentExecutor:
 
     def consume_pending_agents(self) -> None:
         """
-        Consume one pending agent from the queue and execute in a dedicated thread.
+        Consume all pending agents from the queue and execute each in a thread.
 
-        Implement a producer-consumer pattern: the supervisor (producer) adds
-        agents to the registry's pending queue, and this method (consumer) pops
-        one agent per call and executes it. Each agent runs in its own asyncio
-        event loop within the calling thread.
+        Pops all currently pending agents and spawns a dedicated daemon thread
+        for each one. Each thread creates its own asyncio event loop and blocks
+        until agent execution completes.
 
-        Called periodically by a ROS2 timer callback.
-
-        Side Effects
-        ------------
-        - Pops one agent from the pending queue.
-        - Creates a new asyncio event loop for the agent.
-        - Registers the agent as running in the registry.
-        - Blocks the calling thread until agent execution completes.
+        This method is non-blocking from the caller's perspective: it returns
+        immediately after spawning the threads.
         """
-        agent_idle = self.registry.pop_pending()
-        if agent_idle is None:
-            return
+        while True:
+            agent_task = self.registry.pop_pending()
+            if agent_task is None:
+                break
+            thread = threading.Thread(
+                target=self._execute_agent_task,
+                args=(agent_task,),
+                daemon=True,
+                name=f'agent-{agent_task.agent.get_id()}'
+            )
+            thread.start()
 
-        agent_id = agent_idle.agent.get_id()
+    def start(self) -> None:
+        """
+        Start the background consumer thread for event-driven agent execution.
+
+        Spawns a daemon thread that waits on the registry's pending event.
+        When new agents are enqueued, the thread wakes up, consumes all
+        pending agents, and spawns a dedicated thread for each one.
+
+        Must be called once after initialization. Safe to call multiple times
+        (subsequent calls are no-ops if the thread is already running).
+        """
+        if self._consumer_thread is not None and self._consumer_thread.is_alive():
+            self._log_info('Consumer thread is already running.')
+            return
+        self._shutdown_event.clear()
+        self._consumer_thread = threading.Thread(
+            target=self._consumer_loop,
+            daemon=True,
+            name='agent-consumer'
+        )
+        self._consumer_thread.start()
+        self._log_info('Agent consumer thread started.')
+
+    def stop(self) -> None:
+        """
+        Signal the consumer thread to stop and wait for termination.
+
+        Sets the internal shutdown flag and wakes the consumer thread via
+        the registry's pending event so it can check the flag and exit
+        its loop. Running agent threads are daemon threads and will be
+        terminated when the process exits.
+        """
+        self._shutdown_event.set()
+        # Wake the consumer thread if it is blocked waiting for pending agents
+        self.registry.wake_pending()
+        if self._consumer_thread is not None:
+            self._consumer_thread.join(timeout=5.0)
+            self._consumer_thread = None
+        self._log_info('Agent consumer thread stopped.')
+
+    def _consumer_loop(self) -> None:
+        """
+        Wait for pending agents and execute them in dedicated threads.
+
+        Blocks on the registry's pending event. When agents are enqueued,
+        wakes up, clears the signal, consumes all pending agents (each in
+        its own thread), and resumes waiting. Exits when the shutdown event
+        is set.
+        """
+        self._log_info('Consumer loop started, waiting for pending agents...')
+        while not self._shutdown_event.is_set():
+            # Block until pending agents are available or shutdown is signaled
+            self.registry.wait_for_pending()
+            if self._shutdown_event.is_set():
+                break
+            # Clear the signal and drain all pending agents
+            self.registry.clear_pending_signal()
+            self.consume_pending_agents()
+        self._log_info('Consumer loop exiting.')
+
+    def _execute_agent_task(self, agent_task) -> None:
+        """
+        Execute a single agent task in a dedicated thread with its own event loop.
+
+        Creates a new asyncio event loop, schedules the agent execution coroutine,
+        registers the agent as running in the registry, and blocks until the
+        coroutine completes or is cancelled.
+
+        Parameters
+        ----------
+        agent_task : AgentTask
+            The pending agent task containing the agent instance and initial state.
+        """
+        agent_id = agent_task.agent.get_id()
         self._log_info(
             f'Starting execution of agent {agent_id} in thread '
             f'[{threading.current_thread().name}]'
@@ -203,15 +282,15 @@ class AgentExecutor:
         asyncio.set_event_loop(loop)
 
         # Schedule the agent execution coroutine
-        agent_task = loop.create_task(
-            self.run_agent(agent_idle.agent, agent_idle.input_state)
+        agent_async_task = loop.create_task(
+            self.run_agent(agent_task.agent, agent_task.input_state)
         )
 
         # Register as running in the registry
         running_agent = RunningAgentsState(
             agent_id=agent_id,
-            input_prompt=agent_idle.input_state['messages'][0]['content'],
-            coroutine_handler=agent_task,
+            input_prompt=agent_task.input_state['messages'][0]['content'],
+            coroutine_handler=agent_async_task,
             event_loop=loop,
         )
         self.registry.add_running(running_agent)
@@ -222,6 +301,8 @@ class AgentExecutor:
                 f'Working on agent [{agent_id}]'
                 f' in thread [{threading.current_thread().name}]...'
             )
-            loop.run_until_complete(agent_task)
+            loop.run_until_complete(agent_async_task)
         except asyncio.CancelledError:
             self._log_info(f'Agent {agent_id} execution was cancelled.')
+        finally:
+            loop.close()
