@@ -61,12 +61,12 @@ ros2 service call /hierarchical_multiagent/call_agent llm_interactions_msgs/srv/
 graph TB
     subgraph ROS2["ROS2 Environment"]
         SRV[/"CallAgent Service"/]
-        TMR["Agent Timer<br/>(1s period)"]
     end
 
     subgraph HMA["HierarchicalMultiagent Node"]
         SM["SupervisorManager"]
         LOOP["Main Event Loop"]
+        EXC["AgentExecutor<br/>(Event-Driven Consumer)"]
     end
 
     subgraph AgentManagement["Agent Lifecycle"]
@@ -88,8 +88,8 @@ graph TB
 
     SRV -->|"User Query"| SM
     SM -->|"create_agent"| PAL
-    TMR -->|"Consume"| PAL
-    PAL -->|"Execute"| RAL
+    PAL -->|"Event signal"| EXC
+    EXC -->|"Execute"| RAL
     RAL --> SPA1
     RAL --> SPA2
     RAL --> SPA3
@@ -152,7 +152,7 @@ sequenceDiagram
     participant User
     participant Service as CallAgent Service
     participant Sup as SupervisorManager
-    participant Timer as Agent Timer
+    participant Exec as AgentExecutor
     participant SPA as SinglePurposeAgent
     participant LLM as Ollama
 
@@ -162,24 +162,21 @@ sequenceDiagram
     Sup->>LLM: analyze_task()
     LLM-->>Sup: create_agent("Prepare coffee")
     
-    Sup->>Sup: Add to pending_agents_list
+    Sup->>Sup: enqueue → pending_agents_list
+    Sup-->>Exec: Event signal (pending_event.set)
     
-    loop Every 1 second
-        Timer->>Sup: Check pending_agents_list
-        Sup-->>Timer: AgentTask
-        Timer->>SPA: Create new event loop
-        Timer->>SPA: run_agent(initial_state)
-        
-        loop Agent reasoning
-            SPA->>LLM: query_response()
-            LLM-->>SPA: Tool call / Response
-            SPA->>SPA: Execute tool
-        end
-        
-        SPA-->>Sup: FinishedAgentsState
+    Note over Exec: Consumer thread wakes up
+    Exec->>Exec: pop_pending() → spawn thread
+    Exec->>SPA: Create new event loop<br/>+ run_agent(initial_state)
+    
+    loop Agent reasoning
+        SPA->>LLM: query_response()
+        LLM-->>SPA: Tool call / Response
+        SPA->>SPA: Execute tool
     end
     
-    Sup->>Sup: Move to finished_agents_list
+    SPA-->>Exec: FinishedAgentsState
+    Exec->>Exec: Move to finished_agents_list
     Service-->>User: "Query submitted"
 ```
 
@@ -209,7 +206,7 @@ graph LR
 ```mermaid
 stateDiagram-v2
     [*] --> IDLE: Agent created
-    IDLE --> RUNNING: Timer consumes
+    IDLE --> RUNNING: Event triggers execution
     RUNNING --> SUCCESS: Task completed<br/>(steps < max_steps)
     RUNNING --> FAILURE: Error / Cancelled<br/>/ max_steps reached
     SUCCESS --> [*]
@@ -223,7 +220,7 @@ stateDiagram-v2
 ROS2 node that manages the system lifecycle:
 
 - Exposes `CallAgent` service to receive queries
-- Runs periodic timer to consume pending agents
+- Starts event-driven consumer thread for agent execution
 - Initializes and configures the `SupervisorManager`
 - Manages multiple execution threads for agents
 
@@ -232,9 +229,9 @@ ROS2 node that manages the system lifecycle:
 Orchestrates multi-agent coordination:
 
 - **LLM Tools**: `create_agent`, `delete_agent`, `skip_agent`
-- **State management**: Thread-safe lists for pending/running/finished agents
+- **State management**: Thread-safe registry for pending/running/finished agents
 - **LangGraph graph**: Analysis and decision workflow
-- **Mutex protection**: `agent_lists_lock` for safe concurrent access
+- **Event signaling**: `threading.Event` for zero-latency agent consumption
 
 ### SinglePurposeAgent (agent.py)
 

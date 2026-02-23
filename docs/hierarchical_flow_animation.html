@@ -337,10 +337,10 @@
     <div class="label">CallAgent Service</div>
     <div class="desc">agent_callback()</div>
   </div>
-  <div class="node ros" id="nTimer" style="left:446px; top:24px; width:178px;">
-    <div class="icon">⏱️</div>
-    <div class="label">Timer Callback 1.0s</div>
-    <div class="desc">consume_pending_agents()</div>
+  <div class="node ros" id="nConsumer" style="left:446px; top:24px; width:178px;">
+    <div class="icon">⚡</div>
+    <div class="label">Consumer Thread</div>
+    <div class="desc">event-driven execution</div>
   </div>
 
   <!-- Row 1: Supervisor nodes (inside grpSupervisor: 28+20=48 ... 28+730-20=738) -->
@@ -418,7 +418,7 @@
     Node centers (approx):
     nUser:        92, 58    (left:12  w:160 → cx=92,   top:22  h~72 → cy=58)
     nService:     320, 60   (left:240 w:160 → cx=320,  top:24  h~72 → cy=60)
-    nTimer:       535, 60   (left:446 w:178 → cx=535,  top:24  h~72 → cy=60)
+    nTimer:       535, 60   (left:446 w:178 → cx=535,  top:24  h~72 → cy=60)  [now nConsumer]
     nInit:        134, 200  (left:48  w:172 → cx=134,  top:166 h~68 → cy=200)
     nAnalyze:     314, 200  (left:240 w:148 → cx=314,  top:166 h~68 → cy=200)
     nRoute:       488, 200  (left:408 w:160 → cx=488,  top:166 h~68 → cy=200)
@@ -467,7 +467,7 @@
     <path id="a6" class="arrow-path" d="M568,200 L586,200" marker-end="url(#ah)"/>
     <circle class="particle" id="p6"><animateMotion dur="0.4s" fill="freeze" path="M568,200 L586,200"/></circle>
 
-    <!-- A7: Timer (bottom 96) → down → right → Pending (top 298) — dashed -->
+    <!-- A7: Consumer (bottom 96) → down → right → Pending (top 298) — dashed -->
     <path id="a7" class="arrow-path" d="M535,96 L535,130 L595,130 L595,296" marker-end="url(#ah)" stroke-dasharray="6,4"/>
     <circle class="particle" id="p7"><animateMotion dur="0.6s" fill="freeze" path="M535,96 L535,130 L595,130 L595,296"/></circle>
 
@@ -509,74 +509,74 @@ const STEPS = [
   },
   {
     desc: '<span class="step-num">Step 2</span> — <b>CallAgent</b> service receives the query in <code>agent_callback()</code>',
-    show: ['nUser','nService','nTimer'], highlight: ['nService'],
+    show: ['nUser','nService','nConsumer'], highlight: ['nService'],
     arrows: ['a0'], particles: ['p0'], groups: ['grpRos']
   },
   {
     desc: '<span class="step-num">Step 3</span> — Query forwarded to <b>Supervisor LangGraph</b>: system prompt rendered with agents context',
-    show: ['nUser','nService','nTimer','nInit'], highlight: ['nInit'],
+    show: ['nUser','nService','nConsumer','nInit'], highlight: ['nInit'],
     arrows: ['a0','a1'], particles: ['p1'], groups: ['grpRos','grpSupervisor']
   },
   {
     desc: '<span class="step-num">Step 4</span> — <b>analyze_task</b>: LLM (Ollama) reasons about the query and decides to create an agent',
-    show: ['nUser','nService','nTimer','nInit','nAnalyze'], highlight: ['nAnalyze'],
+    show: ['nUser','nService','nConsumer','nInit','nAnalyze'], highlight: ['nAnalyze'],
     arrows: ['a0','a1','a2'], particles: ['p2'], groups: ['grpRos','grpSupervisor']
   },
   {
     desc: '<span class="step-num">Step 5</span> — LLM calls tool <b>create_agent</b>(query: "Navigate to the bedroom") → Agent ID: 1',
-    show: ['nUser','nService','nTimer','nInit','nAnalyze','nCreate'], highlight: ['nCreate'],
+    show: ['nUser','nService','nConsumer','nInit','nAnalyze','nCreate'], highlight: ['nCreate'],
     arrows: ['a0','a1','a2','a4'], particles: ['p4'], groups: ['grpRos','grpSupervisor']
   },
   {
-    desc: '<span class="step-num">Step 6</span> — Agent task <b>enqueued</b> in pending_agents_list (producer-consumer pattern)',
-    show: ['nUser','nService','nTimer','nInit','nAnalyze','nCreate','nPending'], highlight: ['nPending'],
+    desc: '<span class="step-num">Step 6</span> — Agent task <b>enqueued</b> in pending_agents_list → <b>event signal</b> wakes consumer thread',
+    show: ['nUser','nService','nConsumer','nInit','nAnalyze','nCreate','nPending'], highlight: ['nPending'],
     arrows: ['a0','a1','a2','a4','a5'], particles: ['p5'], groups: ['grpRos','grpSupervisor']
   },
   {
     desc: '<span class="step-num">Step 7</span> — <b>route_on_tool_call</b>: tool call detected → route to <b>finalize_conversation</b>',
-    show: ['nUser','nService','nTimer','nInit','nAnalyze','nCreate','nPending','nRoute','nFinalize'],
+    show: ['nUser','nService','nConsumer','nInit','nAnalyze','nCreate','nPending','nRoute','nFinalize'],
     highlight: ['nRoute','nFinalize'],
     arrows: ['a0','a1','a2','a3','a4','a5','a6'], particles: ['p3','p6'],
     groups: ['grpRos','grpSupervisor']
   },
   {
-    desc: '<span class="step-num">Step 8</span> — Timer callback <b>consumes</b> pending agent → spawns <b>dedicated thread</b> + event loop',
-    show: ['nUser','nService','nTimer','nInit','nAnalyze','nCreate','nPending','nRoute','nFinalize'],
-    highlight: ['nTimer','nPending'],
+    desc: '<span class="step-num">Step 8</span> — <b>Event signal</b> wakes consumer thread → spawns <b>dedicated thread</b> + event loop for agent',
+    show: ['nUser','nService','nConsumer','nInit','nAnalyze','nCreate','nPending','nRoute','nFinalize'],
+    highlight: ['nConsumer','nPending'],
     arrows: ['a0','a1','a2','a3','a4','a5','a6','a7'], particles: ['p7'],
     groups: ['grpRos','grpSupervisor']
   },
   {
     desc: '<span class="step-num">Step 9</span> — <b>Agent (ID: 1)</b> starts: MCP setup → tool retrieval → graph build → execute',
-    show: ['nUser','nService','nTimer','nInit','nAnalyze','nCreate','nPending','nRoute','nFinalize','nAgentQR'],
+    show: ['nUser','nService','nConsumer','nInit','nAnalyze','nCreate','nPending','nRoute','nFinalize','nAgentQR'],
     highlight: ['nAgentQR'],
     arrows: ['a0','a1','a2','a3','a4','a5','a6','a7','a8'], particles: ['p8'],
     groups: ['grpRos','grpSupervisor','grpAgent']
   },
   {
     desc: '<span class="step-num">Step 10</span> — Agent\'s LLM calls <b>execute_behavior_tree</b> via MCP server',
-    show: ['nUser','nService','nTimer','nInit','nAnalyze','nCreate','nPending','nRoute','nFinalize','nAgentQR','nAgentMS','nMCP'],
+    show: ['nUser','nService','nConsumer','nInit','nAnalyze','nCreate','nPending','nRoute','nFinalize','nAgentQR','nAgentMS','nMCP'],
     highlight: ['nAgentQR','nMCP'],
     arrows: ['a0','a1','a2','a3','a4','a5','a6','a7','a8','a9','a10'], particles: ['p10'],
     groups: ['grpRos','grpSupervisor','grpAgent']
   },
   {
     desc: '<span class="step-num">Step 11</span> — <b>BT executed</b>: navigate_to_pose(goal: "bedroom") running on the robot 🤖',
-    show: ['nUser','nService','nTimer','nInit','nAnalyze','nCreate','nPending','nRoute','nFinalize','nAgentQR','nAgentMS','nMCP','nBT'],
+    show: ['nUser','nService','nConsumer','nInit','nAnalyze','nCreate','nPending','nRoute','nFinalize','nAgentQR','nAgentMS','nMCP','nBT'],
     highlight: ['nBT'],
     arrows: ['a0','a1','a2','a3','a4','a5','a6','a7','a8','a9','a10','a11'], particles: ['p11'],
     groups: ['grpRos','grpSupervisor','grpAgent']
   },
   {
     desc: '<span class="step-num">Step 12</span> — <b>manage_steps</b>: result received, no more tool calls → route to <b>finish</b>',
-    show: ['nUser','nService','nTimer','nInit','nAnalyze','nCreate','nPending','nRoute','nFinalize','nAgentQR','nAgentMS','nMCP','nBT','nAgentFinish'],
+    show: ['nUser','nService','nConsumer','nInit','nAnalyze','nCreate','nPending','nRoute','nFinalize','nAgentQR','nAgentMS','nMCP','nBT','nAgentFinish'],
     highlight: ['nAgentMS','nAgentFinish'],
     arrows: ['a0','a1','a2','a3','a4','a5','a6','a7','a8','a9','a10','a11','a13'], particles: ['p13'],
     groups: ['grpRos','grpSupervisor','grpAgent']
   },
   {
     desc: '<span class="step-num">Step 13</span> — Agent <b>SUCCESS</b> ✅ → result stored in <b>finished_agents_list</b>',
-    show: ['nUser','nService','nTimer','nInit','nAnalyze','nCreate','nPending','nRoute','nFinalize','nAgentQR','nAgentMS','nMCP','nBT','nAgentFinish','nResult'],
+    show: ['nUser','nService','nConsumer','nInit','nAnalyze','nCreate','nPending','nRoute','nFinalize','nAgentQR','nAgentMS','nMCP','nBT','nAgentFinish','nResult'],
     highlight: ['nResult'],
     arrows: ['a0','a1','a2','a3','a4','a5','a6','a7','a8','a9','a10','a11','a13','a14'], particles: ['p14'],
     groups: ['grpRos','grpSupervisor','grpAgent']
