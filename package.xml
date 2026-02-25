@@ -2,7 +2,7 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>hierarchical_multiagent_langgraph</name>
-  <version>0.0.0</version>
+  <version>1.0.0</version>
   <description>Hierarchical multi-agent system where a Supervisor coordinates multiple Single-Purpose Agents (SPAs) to execute complex tasks.</description>
   <maintainer email="ajtudela@gmail.com">Alberto Tudela</maintainer>
   <author email="ajtudela@gmail.com">Alberto Tudela</author>

@@ -219,6 +219,7 @@ class SupervisorManager(LangGraphBase):
             'create_agent',
             description='Creates a new agent to handle a specific task.'
         )
+        @traceable(name='sup_create_agent')
         def create_agent(query: str) -> str:
             """Create and queue a new SinglePurposeAgent for task execution.
 
@@ -291,6 +292,7 @@ class SupervisorManager(LangGraphBase):
             'delete_agent',
             description='Deletes an existing agent by its ID.'
         )
+        @traceable(name='sup_delete_agent')
         def delete_agent(agent_id: int) -> str:
             """Terminate and remove a running agent by its ID.
 
@@ -381,6 +383,7 @@ class SupervisorManager(LangGraphBase):
             'skip_agent',
             description='Skip agent management for this iteration.'
         )
+        @traceable(name='sup_skip_agent')
         def skip_agent() -> str:
             """No-op tool: skip agent lifecycle management for current iteration.
 
@@ -396,7 +399,7 @@ class SupervisorManager(LangGraphBase):
 
     # ========== LANGGRAPH NODES ==========
 
-    @traceable
+    @traceable(name='sup_set_initial_messages')
     async def set_initial_messages(self, state: InputState) -> Messages:
         """
         Set initial messages from stored prompts and return the initial conversation state.
@@ -432,7 +435,7 @@ class SupervisorManager(LangGraphBase):
 
         return current_state
 
-    @traceable
+    @traceable(name='sup_analyze_task')
     async def analyze_task(self, state: Messages) -> Messages:
         """
         Analyze the incoming task and invoke the LLM to make supervisor decisions.
@@ -458,7 +461,7 @@ class SupervisorManager(LangGraphBase):
 
         return state
 
-    @traceable
+    @traceable(name='sup_route_on_tool_call')
     def route_on_tool_call(self, state: Messages) -> str:
         """
         Route the conversation flow based on tool call presence.
@@ -505,7 +508,7 @@ class SupervisorManager(LangGraphBase):
             self._log_error(f'SUPERVISOR: Error in route_on_tool_call: {e}')
             return 'finish'
 
-    @traceable
+    @traceable(name='sup_finalize_conversation')
     async def finalize_conversation(self, state: Messages) -> Messages:
         """
         Finalize the conversation and clean up resources.

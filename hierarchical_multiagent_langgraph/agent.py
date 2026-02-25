@@ -201,7 +201,7 @@ class SinglePurposeAgent(LangGraphBase):
 
     # ========== LANGGRAPH NODES ==========
 
-    @traceable
+    @traceable(name='spa_query_response')
     async def query_response(self, state: Messages) -> Messages:
         """
         Generate LLM reasoning step and update conversation state with response.
@@ -276,7 +276,7 @@ class SinglePurposeAgent(LangGraphBase):
 
         return self.state
 
-    @traceable
+    @traceable(name='spa_manage_steps')
     def manage_steps(self, state: Messages) -> str:
         """
         Conditional routing: determine whether to continue reasoning or finish task.
@@ -318,7 +318,7 @@ class SinglePurposeAgent(LangGraphBase):
             self._log_warning(f'AGENT: Error in manage_steps: {e}')
             return 'finish'
 
-    @traceable
+    @traceable(name='spa_finish_ollama_interaction')
     async def finish_ollama_interaction(self, state: Messages) -> Messages:
         """
         Finalize agent task execution and transition to terminal state.

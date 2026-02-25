@@ -5,6 +5,7 @@ Launches a langgraph agent as an ros pub/sub node with default parameters.
 
 Loads environment variables from a .env file to enable LangSmith tracing.
 """
+from dotenv import load_dotenv
 import os
 import sys
 
@@ -26,7 +27,6 @@ if venv_path:
     )
     sys.path.insert(0, site_packages)
 
-from dotenv import load_dotenv
 
 def generate_launch_description():
     # Get config .env file
@@ -57,7 +57,7 @@ def generate_launch_description():
 
     # Input parameters declaration
     params_file = LaunchConfiguration('params_file')
-    mcp_servers_file = LaunchConfiguration('mcp_servers_file')
+    # mcp_servers_file = LaunchConfiguration('mcp_servers_file')
     spa_mcp_servers_file = LaunchConfiguration('spa_mcp_servers_file')
     supervisor_sys_prompt_file = LaunchConfiguration('supervisor_sys_prompt_file')
     agent_sys_prompt_file = LaunchConfiguration('agent_sys_prompt_file')
@@ -114,7 +114,7 @@ def generate_launch_description():
 
     # Create our own temporary YAML files that include substitutions
     param_substitutions = {
-        'mcp_servers': mcp_servers_file,
+        # 'mcp_servers': mcp_servers_file,
         'spa_mcp_servers': spa_mcp_servers_file,
         'system_prompt_file': supervisor_sys_prompt_file,
         'spa_system_prompt_file': agent_sys_prompt_file,
