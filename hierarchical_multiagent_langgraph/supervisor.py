@@ -298,8 +298,7 @@ class SupervisorManager(LangGraphBase):
                 f'added to pending list successfully.')
 
             return (
-                f'Agent {agent_id} created successfully '
-                f'(priority={priority}) for task: {query}'
+                f'Agent {agent_id} created successfully (priority={priority}). {query}'
             )
 
         return create_agent
