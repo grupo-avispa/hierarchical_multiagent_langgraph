@@ -291,7 +291,7 @@ class HierarchicalMultiagent(LangGraphRosBase):
         """
         user_query = request.query
 
-        self.get_logger().info(f'Received user query:\n{user_query}')
+        self.get_logger().info(f'Received user query: [{user_query}]')
 
         # Use a fixed thread ID for supervisor to maintain context
         thread_id = 'supervisor'

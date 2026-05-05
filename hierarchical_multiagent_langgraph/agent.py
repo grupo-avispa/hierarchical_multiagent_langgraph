@@ -145,9 +145,9 @@ class SinglePurposeAgent(LangGraphBase):
                 with open(mcp_servers_config, 'r') as f:
                     config_data = json.load(f)
                 self.ollama_agent.mcp_client = Client(config_data)  # type: ignore[union-attr]
-                self._log_info('AGENT: MCP client initialized successfully')
+                self._log_info(f'AGENT [{self.id}]: MCP client initialized successfully')
             except Exception as e:
-                self._log_info(f'Error initializing MCP client: {e}')
+                self._log_info(f'AGENT [{self.id}]: Error initializing MCP client: {e}')
                 self.ollama_agent.mcp_client = None  # type: ignore[union-attr]
 
     def set_id(self, agent_id: int) -> None:
@@ -271,7 +271,7 @@ class SinglePurposeAgent(LangGraphBase):
                 state['messages'].insert(0, sys_message)
             self.state = await self.ollama_agent.invoke(state=state)  # type: ignore[union-attr]
         except ValueError as e:
-            self._log_error(f'AGENT: Error during Ollama agent invocation: {e}')
+            self._log_error(f'AGENT [{self.id}]: Error during Ollama agent invocation: {e}')
             raise
 
         return self.state
@@ -298,24 +298,25 @@ class SinglePurposeAgent(LangGraphBase):
         """
         try:
             has_tool_call, max_steps_reached = self._track_step(state)
-            self._log_info(f'AGENT: Managing steps, current step: {self.steps}')
+            self._log_info(f'AGENT [{self.id}]: Managing steps, current step: {self.steps}')
 
             if max_steps_reached:
-                self._log_info('AGENT: Maximum steps reached, finishing interaction.')
+                self._log_info(f'AGENT [{self.id}]: Maximum steps reached, finishing interaction.')
                 return 'finish'
 
             if has_tool_call:
                 return 'agent'
 
-            self._log_info('AGENT: No tool call detected, finishing interaction.')
+            self._log_info(f'AGENT [{self.id}]: No tool call detected, finishing interaction.')
             self._log_info(
-                'AGENT: Final response from assistant:\n'
+                f'AGENT [{self.id}]: Final response from assistant:\n'
                 f"{state['messages'][-1]['content']}"
             )
-            self._log_info(f'AGENT: Total messages in conversation: {self.messages_count}')
+            self._log_info(
+                f'AGENT [{self.id}]: Total messages in conversation: {self.messages_count}')
             return 'finish'
         except Exception as e:
-            self._log_warning(f'AGENT: Error in manage_steps: {e}')
+            self._log_warning(f'AGENT [{self.id}]: Error in manage_steps: {e}')
             return 'finish'
 
     @traceable(name='spa_finish_ollama_interaction')
@@ -355,12 +356,12 @@ class SinglePurposeAgent(LangGraphBase):
             - Calls ollama_agent.reset_memory() to clear LLM state
             - Logs finalization status
         """
-        self._log_info('Finalizing Ollama interaction.')
+        self._log_info(f'AGENT [{self.id}]: Finalizing Ollama interaction.')
         if self.steps >= self.max_steps:
-            self._log_info('AGENT: Maximum steps reached during finalization.')
+            self._log_info(f'AGENT [{self.id}]: Maximum steps reached during finalization.')
             self.status = AgentStatus.FAILURE
         else:
-            self._log_info('AGENT: Agent reached final state before maximum steps.')
+            self._log_info(f'AGENT [{self.id}]: Agent reached final state before maximum steps.')
             self.status = AgentStatus.SUCCESS
         self.steps = 0
         self.ollama_agent.reset_memory()  # type: ignore[union-attr]

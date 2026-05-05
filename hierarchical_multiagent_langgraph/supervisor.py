@@ -13,6 +13,7 @@ Key components:
 """
 
 import asyncio
+import httpx
 from typing import TypedDict
 import traceback
 
@@ -340,8 +341,8 @@ class SupervisorManager(LangGraphBase):
             target = supervisor.registry.find_running(agent_id)
 
             if target is None:
-                message = f'Error: Agent {agent_id} not found in running agents'
-                supervisor._log_info(message)
+                message = f'SUPERVISOR: Agent {agent_id} not found in running agents'
+                supervisor._log_error(message)
                 return message
 
             query = target.input_prompt
@@ -350,7 +351,7 @@ class SupervisorManager(LangGraphBase):
             if supervisor.ollama_agent.mcp_client is not None:
                 try:
                     supervisor._log_info(
-                        'Stopping behavior tree via MCP client...')
+                        'SUPERVISOR: Stopping behavior tree via MCP client...')
                     stop_future = asyncio.run_coroutine_threadsafe(
                         supervisor.ollama_agent.mcp_client.call_tool(
                             'stop_behavior_tree',
@@ -360,13 +361,25 @@ class SupervisorManager(LangGraphBase):
                     )
                     result = stop_future.result(timeout=8.0)
                     supervisor._log_info(
-                        f'Behavior tree stopped successfully. Result: {result}'
+                        f'SUPERVISOR: Behavior tree stopped successfully. Result: {result}'
+                    )
+                except TimeoutError:
+                    supervisor._log_warning(
+                        f'SUPERVISOR: Timeout while stopping behavior tree '
+                        f'for AGENT [{agent_id}]. '
+                        f'Proceeding with agent cancellation.'
                     )
                 except Exception as e:
-                    supervisor._log_error(
-                        f'ERROR stopping behavior tree for AGENT [{agent_id}]: '
-                        f'{type(e).__name__}: {e}\n{traceback.format_exc()}'
+                    # Handle RemoteProtocolError, connection errors,
+                    # and other exceptions gracefully
+                    error_type = type(e).__name__
+                    supervisor._log_warning(
+                        f'SUPERVISOR: Error stopping behavior tree for AGENT [{agent_id}]: '
+                        f'{error_type}: {str(e)}. '
+                        f'Proceeding with agent cancellation.'
                     )
+                    # Log the full traceback only at debug level to avoid cluttering logs
+                    supervisor._log_debug(f'Full traceback:\n{traceback.format_exc()}')
 
             # Cancel the agent's coroutine AFTER stopping the BT
             if target.event_loop is not None:
@@ -419,7 +432,7 @@ class SupervisorManager(LangGraphBase):
             str
                 Confirmation message indicating no action was taken.
             """
-            supervisor._log_info('Skipping agent action')
+            supervisor._log_info('SUPERVISOR: Skipping agent action')
             return 'No agent action needed for this request'
 
         return skip_agent
@@ -509,17 +522,18 @@ class SupervisorManager(LangGraphBase):
             self._log_info(f'SUPERVISOR: Managing steps, current step: {self.steps}')
 
             if max_steps_reached:
-                self._log_warning('Maximum steps reached, finishing interaction NOW ...')
+                self._log_warning(
+                    'SUPERVISOR: Maximum steps reached, finishing interaction NOW ...')
                 return 'finish'
 
             if has_tool_call:
-                self._log_info('Tool call detected in the last message.')
+                self._log_info('SUPERVISOR: Tool call detected in the last message.')
                 return 'finish'
 
             # No tool call: ask LLM to retry with tools
-            self._log_warning('No tool call detected, trying again.')
+            self._log_warning('SUPERVISOR: No tool call detected, trying again.')
             self._log_warning(
-                'SUPERVISOR: Incorrect response from assistant:\n'
+                'SUPERVISOR: Incorrect response from assistant: '
                 f"{state['messages'][-1]['content']}")
             state['messages'].append(
                 Message(
@@ -558,27 +572,27 @@ class SupervisorManager(LangGraphBase):
 
         # Build context about current agents from registry snapshot
         summary = self.registry.get_summary()
-        self._log_info('\n--- IDLE AGENTS ---\n')
+        self._log_info('----- IDLE AGENTS -----')
         for agent_idle in summary['pending']:
             self._log_info(
-                f'  Idle Agent [{agent_idle.agent.get_id()}]: '
+                f'Idle Agent [{agent_idle.agent.get_id()}]: '
                 f'{agent_idle.input_state["messages"][0]["content"]} '
                 f'(Status: IDLE)'
             )
-        self._log_info('\n--- RUNNING AGENTS ---\n')
+        self._log_info('--- RUNNING AGENTS ----')
         for agent_run in summary['running']:
             self._log_info(
-                f'  Running Agent [{agent_run.agent_id}]: {agent_run.input_prompt} '
+                f'Running Agent [{agent_run.agent_id}]: {agent_run.input_prompt} '
                 f'(Status: RUNNING)'
             )
-        self._log_info('\n--- FINISHED AGENTS ---\n')
+        self._log_info('--- FINISHED AGENTS ---')
         for agent_finished in summary['finished']:
             self._log_info(
-                f'  Finished Agent [{agent_finished.agent_id}]: '
+                f'Finished Agent [{agent_finished.agent_id}]: '
                 f'{agent_finished.input_prompt} '
                 f'(Status: {agent_finished.status})'
             )
-        self._log_info('\n-------------------\n')
+        self._log_info('-----------------------')
 
         self.messages_count = len(state['messages'])
         self._log_info(

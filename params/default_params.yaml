@@ -4,7 +4,7 @@ langgraph_agent_node:
     service_name: "agent_service"
 
     # MCP servers configuration file path
-    spa_mcp_servers: "spa_mcp.json"
+    spa_mcp_servers: ""
     mcp_servers: ""
 
     # Model chat template file path
@@ -24,8 +24,8 @@ langgraph_agent_node:
     tool_call_pattern: "<tool_call>(.*?)</tool_call>"
 
     # Available tools for the supervisor and SPA agents
-    available_tools: [""]
-    spa_available_tools: ["execute_behavior_tree"]
+    available_tools: [ "stop_behavior_tree" ]
+    spa_available_tools: [ "execute_behavior_tree" ]
 
     # System prompt template file path
     spa_system_prompt_file: "agent_system_prompt.jinja"

@@ -43,7 +43,7 @@ def generate_launch_description():
     default_params_file = os.path.join(
         hierarchical_multiagent_langgraph_dir, 'params', 'default_params.yaml')
     default_mcp_servers_file = os.path.join(
-        hierarchical_multiagent_langgraph_dir, 'params', 'langgraph_mcp.json')
+        hierarchical_multiagent_langgraph_dir, 'params', 'sup_mcp.json')
     default_spa_mcp_servers_file = os.path.join(
         hierarchical_multiagent_langgraph_dir, 'params', 'spa_mcp.json')
     default_supervisor_sys_prompt_file = os.path.join(
@@ -57,7 +57,7 @@ def generate_launch_description():
 
     # Input parameters declaration
     params_file = LaunchConfiguration('params_file')
-    # mcp_servers_file = LaunchConfiguration('mcp_servers_file')
+    mcp_servers_file = LaunchConfiguration('mcp_servers_file')
     spa_mcp_servers_file = LaunchConfiguration('spa_mcp_servers_file')
     supervisor_sys_prompt_file = LaunchConfiguration('supervisor_sys_prompt_file')
     agent_sys_prompt_file = LaunchConfiguration('agent_sys_prompt_file')
@@ -114,7 +114,7 @@ def generate_launch_description():
 
     # Create our own temporary YAML files that include substitutions
     param_substitutions = {
-        # 'mcp_servers': mcp_servers_file,
+        'mcp_servers': mcp_servers_file,
         'spa_mcp_servers': spa_mcp_servers_file,
         'system_prompt_file': supervisor_sys_prompt_file,
         'spa_system_prompt_file': agent_sys_prompt_file,
@@ -138,6 +138,7 @@ def generate_launch_description():
         prefix=[venv_python, ' -u '],
         parameters=[configured_params],
         arguments=['--ros-args', '--log-level', log_level],
+        emulate_tty=True
     )
 
     return LaunchDescription([

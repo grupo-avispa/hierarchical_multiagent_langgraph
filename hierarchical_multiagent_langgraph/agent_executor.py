@@ -154,21 +154,22 @@ class AgentExecutor:
             )
         except asyncio.CancelledError:
             self._log_error(
-                f'AGENT [{agent_id}]: Execution cancelled by supervisor.'
+                f'AGENT [{agent_id}]: Error cancelling execution by supervisor.'
             )
             raise
         except asyncio.TimeoutError:
             self._log_error(
-                f'AGENT [{agent_id}]: Execution timed out after '
+                f'AGENT [{agent_id}]: Execution timed out after'
                 f'{self.agent_timeout}s.'
             )
             agent.set_status(AgentStatus.FAILURE)
             execution_result.agent_result = (
-                f'Agent execution timed out after {self.agent_timeout} seconds.'
+                f'AGENT [{agent_id}]: Agent execution timed out after'
+                f' {self.agent_timeout} seconds.'
             )
             execution_result.status = AgentStatus.FAILURE
         except Exception as e:
-            self._log_error(f'ERROR in AGENT {agent_id}: {e}')
+            self._log_error(f'ERROR in AGENT [{agent_id}]: {e}')
             agent.set_status(AgentStatus.FAILURE)
             execution_result.status = AgentStatus.FAILURE
 
@@ -199,7 +200,7 @@ class AgentExecutor:
         for agent_task in pending_tasks:
             agent_id = agent_task.agent.get_id()
             self._log_info(
-                f'Spawning daemon thread for agent {agent_id} '
+                f'AGENT [{agent_id}]: Spawning daemon thread for agent execution '
                 f'(priority={agent_task.priority.name})'
             )
             thread = threading.Thread(
