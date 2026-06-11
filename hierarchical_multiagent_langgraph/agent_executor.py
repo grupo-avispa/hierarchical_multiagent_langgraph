@@ -132,7 +132,7 @@ class AgentExecutor:
                 agent.lang_tools
             )
         except Exception as e:
-            self._log_error(f'ERROR in AGENT [{agent_id}] during setup: {e}')
+            self._log_error(f'AGENT [{agent_id}]: Error during setup: {e}')
 
         # Execution phase: build graph and invoke the task
         try:
@@ -153,8 +153,8 @@ class AgentExecutor:
                 f'AGENT [{agent_id}]: Task completed with status: {final_status}'
             )
         except asyncio.CancelledError:
-            self._log_error(
-                f'AGENT [{agent_id}]: Error cancelling execution by supervisor.'
+            self._log_info(
+                f'AGENT [{agent_id}]: Cancelling execution by supervisor.'
             )
             raise
         except asyncio.TimeoutError:
@@ -169,7 +169,7 @@ class AgentExecutor:
             )
             execution_result.status = AgentStatus.FAILURE
         except Exception as e:
-            self._log_error(f'ERROR in AGENT [{agent_id}]: {e}')
+            self._log_error(f'AGENT [{agent_id}]: Error during execution: {e}')
             agent.set_status(AgentStatus.FAILURE)
             execution_result.status = AgentStatus.FAILURE
 
@@ -286,7 +286,7 @@ class AgentExecutor:
         """
         agent_id = agent_task.agent.get_id()
         self._log_info(
-            f'Starting execution of agent {agent_id} in thread '
+            f'AGENT [{agent_id}]: Starting execution in thread '
             f'[{threading.current_thread().name}]'
         )
 
@@ -311,11 +311,11 @@ class AgentExecutor:
         # Block this thread until the agent task completes
         try:
             self._log_info(
-                f'Working on agent [{agent_id}]'
-                f' in thread [{threading.current_thread().name}]...'
+                f'AGENT [{agent_id}]: Working on agent in thread '
+                f'[{threading.current_thread().name}]...'
             )
             loop.run_until_complete(coroutine_task)
         except asyncio.CancelledError:
-            self._log_info(f'Agent {agent_id} execution was cancelled.')
+            self._log_info(f'AGENT [{agent_id}]: Execution was cancelled.')
         finally:
             loop.close()
