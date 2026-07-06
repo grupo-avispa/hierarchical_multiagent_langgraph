@@ -5,7 +5,8 @@ name: Build
 
 on:
   push:
-    branches: main
+    branches:
+      - main
   pull_request:
   workflow_dispatch:
 
@@ -35,8 +36,8 @@ jobs:
       - name: Install dependencies and build
         uses: ros-tooling/action-ros-ci@v0.4
         with:
-          package-name: |
-            hierarchical_multiagent_langgraph
+          package-name: hierarchical_multiagent_langgraph
+          import-token: ${{ secrets.GHCR_TOKEN  }}
           target-ros2-distro: jazzy
           vcs-repo-file-url: ./.github/repos.repos
           colcon-defaults: |
