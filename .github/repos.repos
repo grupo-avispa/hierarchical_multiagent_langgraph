@@ -1,0 +1,6 @@
+- git:
+    {
+      local-name: langgraph_base_ros,
+      uri: "https://github.com/grupo-avispa/langgraph_base_ros.git",
+      version: main,
+    }
