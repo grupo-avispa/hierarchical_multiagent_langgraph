@@ -2,7 +2,7 @@
 ![ROS2](https://img.shields.io/badge/ros2-jazzy-blue?logo=ros&logoColor=white)
 ![License](https://img.shields.io/github/license/grupo-avispa/hierarchical_multiagent_langgraph)
 [![Build](https://github.com/grupo-avispa/hierarchical_multiagent_langgraph/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/grupo-avispa/hierarchical_multiagent_langgraph/actions/workflows/build.yml)
-[![codecov](https://codecov.io/gh/grupo-avispa/hierarchical_multiagent_langgraph/graph/badge.svg?token=R48HZO62SQ)](https://codecov.io/gh/grupo-avispa/hierarchical_multiagent_langgraph)
+[![codecov](https://codecov.io/gh/grupo-avispa/hierarchical_multiagent_langgraph/graph/badge.svg?token=bfbtqrNlt1)](https://codecov.io/gh/grupo-avispa/hierarchical_multiagent_langgraph)
 
 This package implements a hierarchical multi-agent system where a **Supervisor** coordinates multiple **Single-Purpose Agents (SPAs)** to execute complex tasks. The system uses LLM models (via Ollama) for reasoning and decision-making, and LangGraph to orchestrate state graph-based workflows. Designed for native ROS2 integration, it enables robots to decompose user queries into subtasks and execute them in parallel through specialized agents.
 
