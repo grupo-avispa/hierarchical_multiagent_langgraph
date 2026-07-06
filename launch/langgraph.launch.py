@@ -5,11 +5,11 @@ Launches a langgraph agent as an ros pub/sub node with default parameters.
 
 Loads environment variables from a .env file to enable LangSmith tracing.
 """
-from dotenv import load_dotenv
 import os
 import sys
 
 from ament_index_python import get_package_share_directory
+from dotenv import load_dotenv
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration

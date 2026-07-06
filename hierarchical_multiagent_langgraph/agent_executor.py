@@ -40,6 +40,7 @@ class AgentExecutor:
         Maximum time in seconds for a single agent execution.
     logger : logging.Logger | None
         Optional logger instance for debug/info/warning output.
+
     """
 
     def __init__(
@@ -61,6 +62,7 @@ class AgentExecutor:
         logger : logging.Logger | None
             Optional logger for debug/info/warning output. If None,
             uses Python's standard logging module. Defaults to None.
+
         """
         self.registry = registry
         self.agent_timeout = agent_timeout
@@ -109,6 +111,7 @@ class AgentExecutor:
         asyncio.CancelledError
             If the supervisor calls delete_agent during execution. Caught
             internally; result stored before re-raising for cleanup.
+
         """
         agent_id = agent.get_id()
         execution_result = FinishedAgentsState(
@@ -283,6 +286,7 @@ class AgentExecutor:
         ----------
         agent_task : AgentTask
             The pending agent task containing the agent instance and initial state.
+
         """
         agent_id = agent_task.agent.get_id()
         self._log_info(

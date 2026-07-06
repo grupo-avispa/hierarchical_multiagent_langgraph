@@ -13,9 +13,8 @@ Key components:
 """
 
 import asyncio
-import httpx
-from typing import TypedDict
 import traceback
+from typing import TypedDict
 
 from hierarchical_multiagent_langgraph.agent import AgentStatus, SinglePurposeAgent
 from hierarchical_multiagent_langgraph.agent_executor import AgentExecutor
@@ -43,9 +42,12 @@ class InputState(TypedDict):
     The user prompt is processed to create, coordinate, and manage multiple
     single-purpose agents.
 
-    Attributes:
-        user_prompt (str): The user's query or task description that the
-            supervisor will decompose and delegate to appropriate agents.
+    Attributes
+    ----------
+    user_prompt : str
+        The user's query or task description that the
+        supervisor will decompose and delegate to appropriate agents.
+
     """
 
     user_prompt: str
@@ -71,15 +73,24 @@ class SupervisorManager(LangGraphBase):
         All agent lists (pending, running, finished) are protected by agent_lists_lock to
         ensure safe concurrent access from multiple agent execution threads.
 
-    Attributes:
-        registry (AgentRegistry): Thread-safe registry for agent lifecycle management.
-        supervisor_tools (list): Tools exposed to LLM for agent lifecycle control.
-        sys_prompt (str): System prompt guiding supervisor behavior and reasoning.
-        spa_params (dict): Configuration parameters for SinglePurposeAgent instances.
-        ollama_agent (Ollama): LLM instance for supervisor reasoning and planning.
+    Attributes
+    ----------
+    registry : AgentRegistry
+        Thread-safe registry for agent lifecycle management.
+    supervisor_tools : list
+        Tools exposed to LLM for agent lifecycle control.
+    sys_prompt : str
+        System prompt guiding supervisor behavior and reasoning.
+    spa_params : dict
+        Configuration parameters for SinglePurposeAgent instances.
+    ollama_agent : Ollama
+        LLM instance for supervisor reasoning and planning.
 
-    Raises:
-        ValueError: If ollama_agent or spa_params are not provided during initialization.
+    Raises
+    ------
+    ValueError
+        If ollama_agent or spa_params are not provided during initialization.
+
     """
 
     def __init__(
@@ -98,24 +109,35 @@ class SupervisorManager(LangGraphBase):
         and loads the system prompt. Initializes thread-safe lists for tracking agents
         in various lifecycle states.
 
-        Parameters:
-            logger: Optional ROS2 logger for debug/info/warning output. If None,
-                inherits from parent class. Defaults to None.
-            ollama_agent (Ollama | None): Ollama LLM instance for supervisor
-                reasoning. Required for operation. Defaults to None.
-            max_steps (int): Maximum LangGraph execution steps before termination.
-                Defaults to 5.
-            system_prompt_path (str | None): Path to YAML/text file containing
-                system prompt that guides supervisor behavior. Defaults to None.
-            spa_params (dict | None): Configuration dictionary passed to all
-                created SinglePurposeAgent instances. Required for operation.
-                Defaults to None.
-            agent_timeout (float): Maximum time in seconds for a single agent
-                execution before it is forcefully terminated. Defaults to 120.0.
+        Parameters
+        ----------
+        logger
+            Optional ROS2 logger for debug/info/warning output. If None,
+            inherits from parent class. Defaults to None.
+        ollama_agent : Ollama | None
+            Ollama LLM instance for supervisor
+            reasoning. Required for operation. Defaults to None.
+        max_steps : int
+            Maximum LangGraph execution steps before termination.
+            Defaults to 5.
+        system_prompt_path : str | None
+            Path to YAML/text file containing
+            system prompt that guides supervisor behavior. Defaults to None.
+        spa_params : dict | None
+            Configuration dictionary passed to all
+            created SinglePurposeAgent instances. Required for operation.
+            Defaults to None.
+        agent_timeout : float
+            Maximum time in seconds for a single agent
+            execution before it is forcefully terminated. Defaults to 120.0.
 
-        Raises:
-            ValueError: If ollama_agent is not provided.
-            ValueError: If spa_params is not provided.
+        Raises
+        ------
+        ValueError
+            If ollama_agent is not provided.
+        ValueError
+            If spa_params is not provided.
+
         """
         super().__init__(
             logger=logger,
@@ -157,6 +179,7 @@ class SupervisorManager(LangGraphBase):
         list
             Tool dictionaries with keys ``name``, ``description``,
             ``inputSchema``, and ``tool_object``.
+
         """
         create_agent_fn = self._build_create_agent_tool()
         delete_agent_fn = self._build_delete_agent_tool()
@@ -223,6 +246,7 @@ class SupervisorManager(LangGraphBase):
         StructuredTool
             A ``@tool``-decorated callable that creates and enqueues a new
             ``SinglePurposeAgent``.
+
         """
         supervisor = self
 
@@ -232,7 +256,8 @@ class SupervisorManager(LangGraphBase):
         )
         @traceable(name='sup_create_agent')
         def create_agent(query: str, priority: str = 'medium') -> str:
-            """Create and queue a new SinglePurposeAgent for task execution.
+            """
+            Create and queue a new SinglePurposeAgent for task execution.
 
             Parameters
             ----------
@@ -246,6 +271,7 @@ class SupervisorManager(LangGraphBase):
             -------
             str
                 Confirmation message with the assigned agent ID.
+
             """
             # Map priority string to TaskPriority enum
             priority_map = {
@@ -313,6 +339,7 @@ class SupervisorManager(LangGraphBase):
         StructuredTool
             A ``@tool``-decorated callable that cancels and removes a running
             agent by its ID.
+
         """
         supervisor = self
 
@@ -322,7 +349,8 @@ class SupervisorManager(LangGraphBase):
         )
         @traceable(name='sup_delete_agent')
         def delete_agent(agent_id: int) -> str:
-            """Terminate and remove a running agent by its ID.
+            """
+            Terminate and remove a running agent by its ID.
 
             Three-phase approach to avoid holding the registry lock during
             potentially slow network I/O (MCP ``stop_behavior_tree``).
@@ -336,6 +364,7 @@ class SupervisorManager(LangGraphBase):
             -------
             str
                 Status message indicating success or failure.
+
             """
             # Phase 1: Find the target agent (thread-safe lookup)
             target = supervisor.registry.find_running(agent_id)
@@ -416,6 +445,7 @@ class SupervisorManager(LangGraphBase):
         -------
         StructuredTool
             A ``@tool``-decorated callable that performs no agent action.
+
         """
         supervisor = self
 
@@ -425,12 +455,14 @@ class SupervisorManager(LangGraphBase):
         )
         @traceable(name='sup_skip_agent')
         def skip_agent() -> str:
-            """No-op tool: skip agent lifecycle management for current iteration.
+            """
+            No-op tool: skip agent lifecycle management for current iteration.
 
             Returns
             -------
             str
                 Confirmation message indicating no action was taken.
+
             """
             supervisor._log_info('SUPERVISOR: Skipping agent action')
             return 'No agent action needed for this request'
@@ -448,11 +480,16 @@ class SupervisorManager(LangGraphBase):
         with system and user prompts as the first messages. The system prompt is
         rendered with Jinja2 using the initial empty agent context and user query.
 
-        Parameters:
-            state: The input state containing optional user prompt.
+        Parameters
+        ----------
+        state
+            The input state containing optional user prompt.
 
-        Returns:
-            Messages: The initialized conversation state with system and user messages.
+        Returns
+        -------
+        Messages
+            The initialized conversation state with system and user messages.
+
         """
         # Build context about current agents from registry
         agents_list = self.registry.get_agents_context()
@@ -484,11 +521,16 @@ class SupervisorManager(LangGraphBase):
         1. Re-renders the system prompt if agents context has changed.
         2. Calls the LLM with the current messages.
 
-        Parameters:
-            state: The current context state.
+        Parameters
+        ----------
+        state
+            The current context state.
 
-        Returns:
-            Messages: Updated state with LLM response.
+        Returns
+        -------
+        Messages
+            Updated state with LLM response.
+
         """
         self._log_info('SUPERVISOR: Analyzing task and processing supervisor decision...')
 
@@ -511,11 +553,16 @@ class SupervisorManager(LangGraphBase):
         executed successfully), and retries when no tool call is found (LLM
         responded with plain text instead of using tools).
 
-        Parameters:
-            state (Messages): Current conversation state with messages.
+        Parameters
+        ----------
+        state : Messages
+            Current conversation state with messages.
 
-        Returns:
-            str: Next node to transition to ('agent' to continue, 'finish' to end).
+        Returns
+        -------
+        str
+            Next node to transition to ('agent' to continue, 'finish' to end).
+
         """
         try:
             has_tool_call, max_steps_reached = self._track_step(state)
@@ -556,11 +603,16 @@ class SupervisorManager(LangGraphBase):
 
         Provides a summary of active agents and logs completion.
 
-        Parameters:
-            state: Current context state.
+        Parameters
+        ----------
+        state
+            Current context state.
 
-        Returns:
-            Messages: Final state after cleanup and finalization.
+        Returns
+        -------
+        Messages
+            Final state after cleanup and finalization.
+
         """
         self._log_info('SUPERVISOR: Finalizing supervisor interaction.')
         if self.steps >= self.max_steps:
@@ -612,8 +664,10 @@ class SupervisorManager(LangGraphBase):
         3. Routing based on tool calls
         4. Finalizing the conversation
 
-        Returns:
-            None
+        Returns
+        -------
+        None
+
         """
         # Define the supervisor workflow
         workflow = StateGraph(

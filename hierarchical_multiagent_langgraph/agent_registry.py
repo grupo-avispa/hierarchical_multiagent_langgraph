@@ -23,7 +23,8 @@ from langgraph_base_ros.chat_template_render import Messages
 
 
 class TaskPriority(IntEnum):
-    """Priority levels for agent task scheduling.
+    """
+    Priority levels for agent task scheduling.
 
     Lower integer values indicate higher priority. Agents with higher
     priority are dispatched first when multiple agents are pending.
@@ -36,6 +37,7 @@ class TaskPriority(IntEnum):
         Default priority (1). Standard execution order.
     LOW : int
         Lowest priority (2). Dispatched after higher priority tasks.
+
     """
 
     HIGH = 0
@@ -58,6 +60,7 @@ class AgentTask:
         The SinglePurposeAgent instance that will execute the task.
     input_state : Messages | None
         The initial message state containing the task description and context.
+
     """
 
     agent: SinglePurposeAgent = None  # type: ignore[assignment]
@@ -84,6 +87,7 @@ class RunningAgentsState:
         The asyncio Task object managing the agent's concurrent execution.
     event_loop : asyncio.AbstractEventLoop | None
         Reference to the event loop running the agent's coroutine.
+
     """
 
     agent_id: int = -1
@@ -111,6 +115,7 @@ class FinishedAgentsState:
         The result or output produced by the agent's execution.
     status : AgentStatus
         The final execution status (SUCCESS, FAILURE, or IDLE).
+
     """
 
     agent_id: int = -1
@@ -139,6 +144,7 @@ class AgentRegistry:
         Completed agents with results.
     _id_counter : int
         Auto-incrementing counter for unique agent IDs.
+
     """
 
     def __init__(self) -> None:
@@ -161,6 +167,7 @@ class AgentRegistry:
         -------
         int
             The next unique agent identifier.
+
         """
         with self._lock:
             agent_id = self._id_counter
@@ -178,6 +185,7 @@ class AgentRegistry:
         ----------
         task : AgentTask
             The agent task to enqueue for later execution.
+
         """
         with self._lock:
             self._pending.append(task)
@@ -192,6 +200,7 @@ class AgentRegistry:
         -------
         AgentTask | None
             The next pending task, or None if the queue is empty.
+
         """
         with self._lock:
             if self._pending:
@@ -212,6 +221,7 @@ class AgentRegistry:
         bool
             True if the event was set (pending agent available),
             False if the timeout expired.
+
         """
         return self._pending_event.wait(timeout=timeout)
 
@@ -241,6 +251,7 @@ class AgentRegistry:
         list[AgentTask]
             All previously pending tasks sorted by priority, or an
             empty list if the queue was empty.
+
         """
         with self._lock:
             tasks = list(self._pending)
@@ -256,6 +267,7 @@ class AgentRegistry:
         ----------
         state : RunningAgentsState
             The running agent metadata to track.
+
         """
         with self._lock:
             self._running.append(state)
@@ -273,6 +285,7 @@ class AgentRegistry:
         -------
         RunningAgentsState | None
             The running agent state, or None if not found.
+
         """
         with self._lock:
             return next(
@@ -288,6 +301,7 @@ class AgentRegistry:
         ----------
         agent_id : int
             The unique identifier of the agent to remove.
+
         """
         with self._lock:
             self._running = [
@@ -307,6 +321,7 @@ class AgentRegistry:
             The unique identifier of the agent that finished.
         result : FinishedAgentsState
             The finished agent state with execution results.
+
         """
         with self._lock:
             self._running = [
@@ -325,6 +340,7 @@ class AgentRegistry:
         ----------
         result : FinishedAgentsState
             The finished agent state with execution results.
+
         """
         with self._lock:
             self._finished.append(result)
@@ -341,6 +357,7 @@ class AgentRegistry:
         list[dict]
             List of agent context dictionaries with keys: id, query,
             result, status.
+
         """
         with self._lock:
             agents_list = [
@@ -375,6 +392,7 @@ class AgentRegistry:
         dict[str, list]
             Dictionary with keys 'pending', 'running', 'finished'
             containing list copies.
+
         """
         with self._lock:
             return {

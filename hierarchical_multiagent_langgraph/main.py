@@ -1,4 +1,5 @@
-"""Hierarchical Multiagent LangGraph ROS2 Node.
+"""
+Hierarchical Multiagent LangGraph ROS2 Node.
 
 This module implements a hierarchical multi-agent system using LangGraph
 and ROS2. It manages a supervisor agent that coordinates multiple specialized
@@ -84,16 +85,24 @@ class HierarchicalMultiagent(LangGraphRosBase):
         ROS2 executor. The consumer thread uses threading.Event for zero-latency
         wake-up when new agents are enqueued.
 
-    Attributes:
-        supervisor_manager (SupervisorManager): Manages supervisor agent and LangGraph workflow.
-        agent_srv (rclpy.node.Service): ROS2 service endpoint for receiving queries.
-        spa_params (dict): Configuration passed to all SinglePurposeAgent instances.
-        loop (asyncio.AbstractEventLoop): Main event loop for supervisor execution.
-        max_steps (int): Maximum LangGraph steps for supervisor and agents.
+    Attributes
+    ----------
+    supervisor_manager : SupervisorManager
+        Manages supervisor agent and LangGraph workflow.
+    agent_srv : rclpy.node.Service
+        ROS2 service endpoint for receiving queries.
+    spa_params : dict
+        Configuration passed to all SinglePurposeAgent instances.
+    loop : asyncio.AbstractEventLoop
+        Main event loop for supervisor execution.
+    max_steps : int
+        Maximum LangGraph steps for supervisor and agents.
 
-    Raises:
-        No explicit raises, but initialization failures in supervisor setup may
-        propagate from SupervisorManager or LangGraphBase parent classes.
+    Notes
+    -----
+    No explicit raises, but initialization failures in supervisor setup may
+    propagate from SupervisorManager or LangGraphBase parent classes.
+
     """
 
     def __init__(self):
@@ -112,9 +121,11 @@ class HierarchicalMultiagent(LangGraphRosBase):
         After successful initialization, the node is ready to receive user queries
         via ROS2 service and manage the hierarchical multi-agent execution.
 
-        Raises:
-            Various exceptions from parent class or SupervisorManager if
-            configuration loading, LLM connection, or LangGraph building fails.
+        Notes
+        -----
+        Various exceptions from parent class or SupervisorManager if
+        configuration loading, LLM connection, or LangGraph building fails.
+
         """
         # Call the base class initializer
         super().__init__()
@@ -186,16 +197,19 @@ class HierarchicalMultiagent(LangGraphRosBase):
             - Re-raises exceptions to prevent node startup with incomplete graph
             - Ensures node initialization fails fast on graph building errors
 
-        Parameters:
-            None: Uses supervisor_manager and main event loop
+        Uses supervisor_manager and the main event loop rather than explicit
+        parameters.
 
-        Returns:
-            None: Compiled graph stored in supervisor_manager.graph
+        Returns
+        -------
+        None
+            Compiled graph stored in supervisor_manager.graph
 
         Side Effects:
             - Populates supervisor_manager.graph with compiled LangGraph
             - Logs success/failure of graph compilation
             - May raise exceptions that propagate to __init__
+
         """
         # Initialize and compile the LangGraph workflow
         try:
@@ -213,19 +227,24 @@ class HierarchicalMultiagent(LangGraphRosBase):
         Submits the supervisor task to the event loop and blocks until completion.
         Results are logged to console after processing finishes.
 
-        Parameters:
-            input_state (InputState): Initial state with 'user_prompt'.
-                Format: {'user_prompt': 'user query string'}
-            thread_id (str): Checkpoint thread identifier for state persistence.
+        Parameters
+        ----------
+        input_state : InputState
+            Initial state with 'user_prompt'.
+            Format: {'user_prompt': 'user query string'}
+        thread_id : str
+            Checkpoint thread identifier for state persistence.
 
-        Returns:
-            None
+        Returns
+        -------
+        None
 
         Side Effects:
             - Blocks calling thread until graph execution completes
             - Logs result/errors to console (not returned to ROS2 caller)
             - May trigger agent creation/execution in background
             - Updates supervisor_manager agent lists during execution
+
         """
         config = {'configurable': {'thread_id': thread_id}}
         self.loop.run_until_complete(
@@ -270,12 +289,17 @@ class HierarchicalMultiagent(LangGraphRosBase):
             - Does not log processing time (asynchronous execution)
             - Results printed to logger by supervisor in background
 
-        Parameters:
-            request (CallAgent.Request): Service request with query string.
-            response (CallAgent.Response): Service response object to populate.
+        Parameters
+        ----------
+        request : CallAgent.Request
+            Service request with query string.
+        response : CallAgent.Response
+            Service response object to populate.
 
-        Returns:
-            CallAgent.Response: Response with fixed agent_response string.
+        Returns
+        -------
+        CallAgent.Response
+            Response with fixed agent_response string.
 
         Side Effects:
             - Queues supervisor graph processing in event loop
@@ -288,6 +312,7 @@ class HierarchicalMultiagent(LangGraphRosBase):
             multiple concurrent requests without blocking on long-running graph
             execution. Graph processing happens in dedicated event loop thread managed
             by _agent_execution_timer_callback.
+
         """
         user_query = request.query
 
@@ -376,12 +401,16 @@ def main(args=None) -> None:
         2. Executes until shutdown
         3. Cleanup: stops consumer thread, destroys node, shuts down rclpy
 
-    Parameters:
-        args (list | None): Command-line arguments passed to rclpy.init().
-            None uses sys.argv. Typical: ['--ros-args', '--log-level', 'info']
+    Parameters
+    ----------
+    args : list | None
+        Command-line arguments passed to rclpy.init().
+        None uses sys.argv. Typical: ['--ros-args', '--log-level', 'info']
 
-    Returns:
-        None: Exits process via rclpy.shutdown() or exception
+    Returns
+    -------
+    None
+        Exits process via rclpy.shutdown() or exception
 
     Side Effects:
         - Initializes global ROS2 context (rclpy.init)

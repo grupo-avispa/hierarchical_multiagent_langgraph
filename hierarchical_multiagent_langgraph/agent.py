@@ -34,11 +34,17 @@ class AgentStatus(str, Enum):
     Represents the lifecycle status of a SinglePurposeAgent during task execution.
     Allows the supervisor to track agent progress and determine next actions.
 
-    Attributes:
-        IDLE (str): Agent has been created but has not yet started execution.
-        RUNNING (str): Agent is currently executing its assigned task.
-        SUCCESS (str): Agent successfully completed its task.
-        FAILURE (str): Agent encountered an error and could not complete the task.
+    Attributes
+    ----------
+    IDLE : str
+        Agent has been created but has not yet started execution.
+    RUNNING : str
+        Agent is currently executing its assigned task.
+    SUCCESS : str
+        Agent successfully completed its task.
+    FAILURE : str
+        Agent encountered an error and could not complete the task.
+
     """
 
     IDLE = 'idle'
@@ -71,18 +77,30 @@ class SinglePurposeAgent(LangGraphBase):
         Uses Ollama LLM for agent reasoning, planning, and decision-making throughout
         task execution. Respects max_steps limit to prevent infinite loops.
 
-    Attributes:
-        id (int): Unique identifier assigned by supervisor. Initialized to -1.
-        status (AgentStatus): Current execution state (IDLE, RUNNING, SUCCESS, FAILURE).
-        lang_tools (list): Tools available to agent, loaded from configuration.
-        sys_prompt (str): System prompt from file guiding agent behavior and reasoning.
-        ollama_agent (Ollama): LLM instance for agent task reasoning and execution.
-        mcp_client (Client | None): Optional MCP client providing extended tool access.
-        max_steps (int): Maximum LangGraph steps before task termination.
-        logger: Optional ROS2 logger inherited from parent LangGraphBase.
+    Attributes
+    ----------
+    id : int
+        Unique identifier assigned by supervisor. Initialized to -1.
+    status : AgentStatus
+        Current execution state (IDLE, RUNNING, SUCCESS, FAILURE).
+    lang_tools : list
+        Tools available to agent, loaded from configuration.
+    sys_prompt : str
+        System prompt from file guiding agent behavior and reasoning.
+    ollama_agent : Ollama
+        LLM instance for agent task reasoning and execution.
+    mcp_client : Client | None
+        Optional MCP client providing extended tool access.
+    max_steps : int
+        Maximum LangGraph steps before task termination.
+    logger
+        Optional ROS2 logger inherited from parent LangGraphBase.
 
-    Raises:
-        ValueError: If ollama_agent is not provided during initialization.
+    Raises
+    ------
+    ValueError
+        If ollama_agent is not provided during initialization.
+
     """
 
     def __init__(
@@ -100,26 +118,35 @@ class SinglePurposeAgent(LangGraphBase):
         and initializes MCP client if provided. The agent is ready for task
         assignment after initialization.
 
-        Parameters:
-            logger: Optional ROS2 logger for debug/info output. If None,
-                inherits from parent class. Defaults to None.
-            ollama_agent (Ollama | None): Ollama LLM instance for agent
-                reasoning and task execution. Required. Defaults to None.
-            max_steps (int): Maximum LangGraph execution steps before task
-                termination. Prevents infinite loops. Defaults to 5.
-            system_prompt_path (str | None): Path to YAML/text file containing
-                system prompt that guides agent behavior. Defaults to None.
-            mcp_servers_config (str | None): Path to JSON file with Model Context
-                Protocol server configurations for extended tool access. If provided,
-                MCP client is initialized; if initialization fails, continues without
-                it. Defaults to None.
+        Parameters
+        ----------
+        logger
+            Optional ROS2 logger for debug/info output. If None,
+            inherits from parent class. Defaults to None.
+        ollama_agent : Ollama | None
+            Ollama LLM instance for agent
+            reasoning and task execution. Required. Defaults to None.
+        max_steps : int
+            Maximum LangGraph execution steps before task
+            termination. Prevents infinite loops. Defaults to 5.
+        system_prompt_path : str | None
+            Path to YAML/text file containing
+            system prompt that guides agent behavior. Defaults to None.
+        mcp_servers_config : str | None
+            Path to JSON file with Model Context
+            Protocol server configurations for extended tool access. If provided,
+            MCP client is initialized; if initialization fails, continues without
+            it. Defaults to None.
 
-        Raises:
-            ValueError: If ollama_agent is not provided.
+        Raises
+        ------
+        ValueError
+            If ollama_agent is not provided.
 
         Note:
             MCP client initialization failures are logged but do not prevent
             agent initialization. The agent will function with available tools only.
+
         """
         if ollama_agent is None:
             raise ValueError('Ollama agent instance must be provided to LangGraphManager.')
@@ -157,11 +184,15 @@ class SinglePurposeAgent(LangGraphBase):
         Called by supervisor during agent creation to set auto-generated ID.
         ID is used for tracking, logging, and deletion requests.
 
-        Parameters:
-            agent_id (int): Unique auto-incremented identifier assigned by supervisor.
+        Parameters
+        ----------
+        agent_id : int
+            Unique auto-incremented identifier assigned by supervisor.
 
-        Returns:
-            None
+        Returns
+        -------
+        None
+
         """
         self.id = agent_id
 
@@ -169,8 +200,11 @@ class SinglePurposeAgent(LangGraphBase):
         """
         Retrieve the agent's unique identifier.
 
-        Returns:
-            int: The agent's unique ID assigned during creation, or -1 if not yet assigned.
+        Returns
+        -------
+        int
+            The agent's unique ID assigned during creation, or -1 if not yet assigned.
+
         """
         return self.id
 
@@ -178,9 +212,12 @@ class SinglePurposeAgent(LangGraphBase):
         """
         Retrieve the current execution status of the agent.
 
-        Returns:
-            AgentStatus: Current status (IDLE, RUNNING, SUCCESS, or FAILURE).
-                Transitions from RUNNING→SUCCESS/FAILURE during execution.
+        Returns
+        -------
+        AgentStatus
+            Current status (IDLE, RUNNING, SUCCESS, or FAILURE).
+            Transitions from RUNNING→SUCCESS/FAILURE during execution.
+
         """
         return self.status
 
@@ -191,11 +228,15 @@ class SinglePurposeAgent(LangGraphBase):
         Called during initialization (RUNNING) and finalization (SUCCESS/FAILURE).
         Allows supervisor to track agent lifecycle.
 
-        Parameters:
-            status (AgentStatus): New status to assign (IDLE, RUNNING, SUCCESS, FAILURE).
+        Parameters
+        ----------
+        status : AgentStatus
+            New status to assign (IDLE, RUNNING, SUCCESS, FAILURE).
 
-        Returns:
-            None
+        Returns
+        -------
+        None
+
         """
         self.status = status
 
@@ -228,22 +269,29 @@ class SinglePurposeAgent(LangGraphBase):
             - Stores updated state with new LLM message
             - Preserves conversation history
 
-        Parameters:
-            state (Messages): Current conversation state with message history.
-                Format: {'messages': [Message(role, content), ...]}
+        Parameters
+        ----------
+        state : Messages
+            Current conversation state with message history.
+            Format: {'messages': [Message(role, content), ...]}
 
-        Returns:
-            Messages: Updated state with new message(s) from LLM response.
-                LLM may add tool calls or final response message.
+        Returns
+        -------
+        Messages
+            Updated state with new message(s) from LLM response.
+            LLM may add tool calls or final response message.
 
-        Raises:
-            ValueError: If Ollama agent invocation fails (logged and re-raised).
+        Raises
+        ------
+        ValueError
+            If Ollama agent invocation fails (logged and re-raised).
 
         Side Effects:
             - Sets self.status = AgentStatus.RUNNING
             - Updates self.state with new agent response
             - Modifies state['messages'] in-place (prepends system message if needed)
             - Connects to MCP servers if configured
+
         """
         self.status = AgentStatus.RUNNING
         # Invoke Ollama agent
@@ -290,11 +338,16 @@ class SinglePurposeAgent(LangGraphBase):
             - Tool call present but max_steps reached → 'finish' (force exit)
             - No tool call → 'finish' (task naturally complete)
 
-        Parameters:
-            state (Messages): Current conversation state with message history.
+        Parameters
+        ----------
+        state : Messages
+            Current conversation state with message history.
 
-        Returns:
-            str: Next node identifier ('agent' or 'finish') for conditional edge routing.
+        Returns
+        -------
+        str
+            Next node identifier ('agent' or 'finish') for conditional edge routing.
+
         """
         try:
             has_tool_call, max_steps_reached = self._track_step(state)
@@ -343,18 +396,23 @@ class SinglePurposeAgent(LangGraphBase):
             - Final message contains agent's last response/tool call
             - Supervisor extracts agent_result from last message content
 
-        Parameters:
-            state (Messages): Final conversation state at completion.
-                Contains all messages from task start to finish.
+        Parameters
+        ----------
+        state : Messages
+            Final conversation state at completion.
+            Contains all messages from task start to finish.
 
-        Returns:
-            Messages: Unmodified final state returned to supervisor/caller.
+        Returns
+        -------
+        Messages
+            Unmodified final state returned to supervisor/caller.
 
         Side Effects:
             - Sets self.status = SUCCESS or FAILURE based on max_steps check
             - Resets self.steps = 0
             - Calls ollama_agent.reset_memory() to clear LLM state
             - Logs finalization status
+
         """
         self._log_info(f'AGENT [{self.id}]: Finalizing Ollama interaction.')
         if self.steps >= self.max_steps:
@@ -398,15 +456,18 @@ class SinglePurposeAgent(LangGraphBase):
             - Ready for invocation by supervisor/run_agent()
             - One graph per agent instance
 
-        Parameters:
-            None: Uses instance attributes (query_response, manage_steps, etc.)
+        Uses instance attributes (query_response, manage_steps, etc.) rather
+        than explicit parameters.
 
-        Returns:
-            None: Compiled graph stored in self.graph attribute.
+        Returns
+        -------
+        None
+            Compiled graph stored in self.graph attribute.
 
         Side Effects:
             - Creates self.graph (compiled StateGraph)
             - Ready for async execution via graph.ainvoke(initial_state)
+
         """
         # Create the StateGraph workflow
         workflow = StateGraph(Messages)

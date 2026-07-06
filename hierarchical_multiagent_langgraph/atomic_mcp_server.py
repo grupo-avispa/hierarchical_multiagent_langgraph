@@ -15,25 +15,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import rclpy
-from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
-from rclpy.time import Time
-from rclpy.action import ActionClient
-from rclpy.executors import MultiThreadedExecutor
-from rclpy.callback_groups import ReentrantCallbackGroup
-from object_with_region.msg import ObjectRegion3DArray
-from audio_common_msgs.action import TTS
-from llm_interactions_msgs.srv import RetrieveDocuments
-from semantic_navigation_msgs.srv import GenerateRandomGoals
-from nav2_msgs.action import NavigateThroughPoses, DockRobot
 import asyncio
+from datetime import date
+import json
 import threading
 import time
+
+from audio_common_msgs.action import TTS
 from fastmcp import FastMCP
-import json
-from datetime import date
+from llm_interactions_msgs.srv import RetrieveDocuments
+from nav2_msgs.action import DockRobot, NavigateThroughPoses
+from object_with_region.msg import ObjectRegion3DArray
+import rclpy
+from rclpy.action import ActionClient
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
+from rclpy.node import Node
+from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.time import Time
 import requests
+from semantic_navigation_msgs.srv import GenerateRandomGoals
 
 
 # Initialize MCP server
@@ -121,8 +122,11 @@ class GetObjectRegionNode(Node):
         """
         Get valid objects data with timeout handling.
 
-        Returns:
-            ObjectRegion3DArray or None if no valid data available
+        Returns
+        -------
+        ObjectRegion3DArray or None
+            None if no valid data is available within the timeout.
+
         """
         with self.objects_lock:
             current_objects = self.objects
@@ -167,11 +171,16 @@ class GetObjectRegionNode(Node):
         """
         Search for an object by name and get its region.
 
-        Args:
-            object_name: Object name to search for (class_id)
+        Parameters
+        ----------
+        object_name : str
+            Object name to search for (class_id).
 
-        Returns:
-            dict with 'found', 'region' and message
+        Returns
+        -------
+        dict
+            Dict with 'found', 'region' and 'message' keys.
+
         """
         # Get valid objects data
         current_objects = self.get_valid_objects_data()
@@ -212,12 +221,18 @@ class GetObjectRegionNode(Node):
         """
         Send text to TTS action server.
 
-        Args:
-            text: Text to speak
-            timeout: Timeout in seconds to wait for action server
+        Parameters
+        ----------
+        text : str
+            Text to speak.
+        timeout : float
+            Timeout in seconds to wait for action server.
 
-        Returns:
-            dict with 'success' and 'message'
+        Returns
+        -------
+        dict
+            Dict with 'success' and 'message'.
+
         """
         # Wait for action server
         if not self._tts_action_client.wait_for_server(timeout_sec=timeout):
@@ -258,16 +273,25 @@ class GetObjectRegionNode(Node):
         """
         Call RAG service to retrieve documents.
 
-        Args:
-            query: Search query string
-            k: Number of documents to retrieve (default: 3)
-            filters: Optional filters for search
-            enable_refinement: Enable RAG refinement (default: False)
-            timeout: Timeout in seconds to wait for service
+        Parameters
+        ----------
+        query : str
+            Search query string.
+        k : int
+            Number of documents to retrieve. Defaults to 3.
+        filters : str
+            Optional filters for search.
+        enable_refinement : bool
+            Enable RAG refinement. Defaults to False.
+        timeout : float
+            Timeout in seconds to wait for service.
 
-        Returns:
-            dict with 'success', 'status', 'total_results', 'documents', and
-                optionally 'refinement'
+        Returns
+        -------
+        dict
+            Dict with 'success', 'status', 'total_results', 'documents', and
+            optionally 'refinement'.
+
         """
         # Wait for service
         if not self._rag_client.wait_for_service(timeout_sec=timeout):
@@ -326,13 +350,20 @@ class GetObjectRegionNode(Node):
         """
         Move to a specific region by first generating a goal and then navigating to it.
 
-        Args:
-            region_name: Name of the region to navigate to
-            number_of_goals: Number of goals to generate (default: 1)
-            timeout: Timeout in seconds for the operation
+        Parameters
+        ----------
+        region_name : str
+            Name of the region to navigate to.
+        number_of_goals : int
+            Number of goals to generate. Defaults to 1.
+        timeout : float
+            Timeout in seconds for the operation.
 
-        Returns:
-            dict with 'success', 'message', and navigation details
+        Returns
+        -------
+        dict
+            Dict with 'success', 'message', and navigation details.
+
         """
         # Step 1: Generate random goals in the region
         if not self._generate_random_goals_client.wait_for_service(timeout_sec=5.0):
@@ -411,15 +442,22 @@ class GetObjectRegionNode(Node):
         """
         Dock the robot to a charging station.
 
-        Args:
-            dock_id: ID or name of the dock (optional if dock has default)
-            dock_type: Type of dock plugin (optional)
-            navigate_to_staging_pose: Whether to autonomously navigate to staging pose
-                (default: True)
-            timeout: Timeout in seconds for docking operation
+        Parameters
+        ----------
+        dock_id : str
+            ID or name of the dock (optional if dock has a default).
+        dock_type : str
+            Type of dock plugin (optional).
+        navigate_to_staging_pose : bool
+            Whether to autonomously navigate to the staging pose. Defaults to True.
+        timeout : float
+            Timeout in seconds for the docking operation.
 
-        Returns:
-            dict with 'success', 'message', 'num_retries', and error information
+        Returns
+        -------
+        dict
+            Dict with 'success', 'message', 'num_retries', and error information.
+
         """
         # Wait for action server
         if not self._dock_action_client.wait_for_server(timeout_sec=10.0):
@@ -476,12 +514,18 @@ async def charge_robot(dock_id: str = '', navigate_to_staging_pose: bool = True)
     """
     Commands the robot to dock at a charging station.
 
-    Args:
-        dock_id: ID or name of the charging dock (leave empty for default dock)
-        navigate_to_staging_pose: Whether to autonomously navigate to staging pose (default: True)
+    Parameters
+    ----------
+    dock_id : str
+        ID or name of the charging dock (leave empty for default dock).
+    navigate_to_staging_pose : bool
+        Whether to autonomously navigate to the staging pose. Defaults to True.
 
-    Returns:
-        dict with 'success', 'message', 'num_retries', and error information if applicable
+    Returns
+    -------
+    dict
+        Dict with 'success', 'message', 'num_retries', and error information
+        if applicable.
 
     """
     if ros_node is None:
@@ -506,12 +550,17 @@ async def move_to_region(region_name: str, number_of_goals: int = 1) -> dict:
     """
     Move the robot to a specific region by generating navigation goals and executing navigation.
 
-    Args:
-        region_name: Name of the region to navigate to
-        number_of_goals: Number of navigation goals to generate (default: 1)
+    Parameters
+    ----------
+    region_name : str
+        Name of the region to navigate to.
+    number_of_goals : int
+        Number of navigation goals to generate. Defaults to 1.
 
-    Returns:
-        dict with 'success', 'message', and 'goals_generated' count
+    Returns
+    -------
+    dict
+        Dict with 'success', 'message', and 'goals_generated' count.
 
     """
     if ros_node is None:
@@ -537,14 +586,21 @@ async def retrieve_documents(query: str, k: int = 3, enable_refinement: bool = F
     """
     Search for and retrieves relevant documents using the RAG system.
 
-    Args:
-        query: Search query string
-        k: Number of documents to retrieve (default: 3)
-        enable_refinement: Enable RAG refinement to get refined answer (default: False)
+    Parameters
+    ----------
+    query : str
+        Search query string.
+    k : int
+        Number of documents to retrieve. Defaults to 3.
+    enable_refinement : bool
+        Enable RAG refinement to get a refined answer. Defaults to False.
 
-    Returns:
-        dict with 'success', 'status', 'total_results', 'documents' list, and
-            optionally 'refinement'
+    Returns
+    -------
+    dict
+        Dict with 'success', 'status', 'total_results', 'documents' list, and
+        optionally 'refinement'.
+
     """
     if ros_node is None:
         return {
@@ -572,11 +628,15 @@ async def say_text(text: str) -> dict:
     """
     Speak text using the robot's TTS action.
 
-    Args:
-        text: Text to speak
+    Parameters
+    ----------
+    text : str
+        Text to speak.
 
-    Returns:
-        dict with 'success' (bool) and 'message' (str)
+    Returns
+    -------
+    dict
+        Dict with 'success' (bool) and 'message' (str).
 
     """
     if ros_node is None:
@@ -600,11 +660,15 @@ async def get_object_region(object_name: str) -> dict:
     Search for an object by name in the array of detected objects from the vision system
     and returns the region where it is located.
 
-    Args:
-        object_name: Name of the object to search for (class_id)
+    Parameters
+    ----------
+    object_name : str
+        Name of the object to search for (class_id).
 
-    Returns:
-        dict with 'found' (bool), 'region' (str or None) and 'message' (str)
+    Returns
+    -------
+    dict
+        Dict with 'found' (bool), 'region' (str or None) and 'message' (str).
 
     """
     if ros_node is None:
