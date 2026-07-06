@@ -24,14 +24,10 @@ jobs:
           required-ros-distributions: jazzy
 
       - name: Install Python dependencies
-        # Install into the system python3 explicitly: colcon and rclpy are apt packages
-        # tied to /usr/bin/python3, while the bare `python3`/`pip` on PATH may resolve to
-        # the runner's hosted-toolcache Python instead. Installing there would leave the
-        # test dependencies invisible to `colcon test`, and rclpy invisible to pytest.
         run: |
           /usr/bin/python3 -m pip install --break-system-packages --upgrade pip
           /usr/bin/python3 -m pip install --break-system-packages -r requirements.txt
-          /usr/bin/python3 -m pip install --break-system-packages pytest pytest-mock pytest-asyncio
+          /usr/bin/python3 -m pip install --break-system-packages pytest pytest-mock "pytest-asyncio<0.24"
 
       - name: Install dependencies and build
         uses: ros-tooling/action-ros-ci@v0.4
