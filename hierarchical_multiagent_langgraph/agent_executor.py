@@ -127,6 +127,16 @@ class AgentExecutor:
             If the supervisor calls delete_agent during execution. Caught
             internally; result stored before re-raising for cleanup.
 
+        Notes
+        -----
+        The MCP connection is opened once here and kept open for the whole
+        execution instead of reconnecting on every ping/resource-list/tool
+        call. fastmcp's ``Client`` context manager is reentrant (internal
+        nesting counter), so the ``async with`` calls elsewhere in the
+        codebase (``query_response``'s resource listing,
+        ``Ollama.invoke``'s tool execution) reuse this same session instead
+        of paying a new connection handshake each time.
+
         """
         agent_id = agent.get_id()
         execution_result = FinishedAgentsState(
@@ -136,13 +146,18 @@ class AgentExecutor:
             status=AgentStatus.FAILURE,
         )
 
-        # Setup phase: MCP client verification and tool retrieval.
-        # Failures are logged but do not prevent execution.
+        mcp_client = agent.ollama_agent.mcp_client  # type: ignore[union-attr]
+        mcp_connected = False
+
+        # Setup phase: open the MCP connection (kept alive for the rest of
+        # this method) and retrieve tools. Failures are logged but do not
+        # prevent execution.
         try:
             self._log_info(f'AGENT [{agent_id}]: Starting execution pipeline...')
-            if agent.ollama_agent.mcp_client is not None:  # type: ignore[union-attr]
-                async with agent.ollama_agent.mcp_client as client:  # type: ignore[union-attr]
-                    await client.ping()
+            if mcp_client is not None:
+                await mcp_client.__aenter__()
+                mcp_connected = True
+                await mcp_client.ping()
                 self._log_info(f'AGENT [{agent_id}]: MCP client connection verified')
 
             self._log_info(f'AGENT [{agent_id}]: Retrieving tools...')
@@ -190,6 +205,13 @@ class AgentExecutor:
             self._log_error(f'AGENT [{agent_id}]: Error during execution: {e}')
             agent.set_status(AgentStatus.FAILURE)
             execution_result.status = AgentStatus.FAILURE
+        finally:
+            if mcp_connected:
+                try:
+                    await mcp_client.__aexit__(None, None, None)
+                except Exception as e:
+                    self._log_error(
+                        f'AGENT [{agent_id}]: Error closing MCP client: {e}')
 
         # Store execution result in the registry
         self.registry.move_to_finished(agent_id, execution_result)
