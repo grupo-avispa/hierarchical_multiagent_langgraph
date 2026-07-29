@@ -222,7 +222,7 @@ class HierarchicalMultiagent(LangGraphRosBase):
 
         self.get_logger().info('SupervisorManager graph created successfully...')
 
-    def _process_graph(self, input_state: InputState, thread_id: str) -> None:
+    def _process_graph(self, input_state: InputState) -> None:
         """
         Invoke supervisor's graph synchronously, blocking the calling thread.
 
@@ -234,8 +234,6 @@ class HierarchicalMultiagent(LangGraphRosBase):
         input_state : InputState
             Initial state with 'user_prompt'.
             Format: {'user_prompt': 'user query string'}
-        thread_id : str
-            Checkpoint thread identifier for state persistence.
 
         Returns
         -------
@@ -248,9 +246,8 @@ class HierarchicalMultiagent(LangGraphRosBase):
             - Updates supervisor_manager agent lists during execution
 
         """
-        config = {'configurable': {'thread_id': thread_id}}
         self.loop.run_until_complete(
-            self.supervisor_manager.graph.ainvoke(input_state, config=config)
+            self.supervisor_manager.graph.ainvoke(input_state)
         )
 
     def agent_callback(self, request, response):
@@ -320,15 +317,12 @@ class HierarchicalMultiagent(LangGraphRosBase):
 
         self.get_logger().info(f'Received user query: [{user_query}]')
 
-        # Use a fixed thread ID for supervisor to maintain context
-        thread_id = 'supervisor'
-
         # Create input state with user prompt
         input_state: InputState = {'user_prompt': user_query}
 
         # Process graph
         self.get_logger().info('Processing query asynchronously...')
-        self._process_graph(input_state, thread_id)
+        self._process_graph(input_state)
         response.agent_response = 'Query submitted for processing'
 
         self.get_logger().info('Query processing submitted; returning response to caller.')

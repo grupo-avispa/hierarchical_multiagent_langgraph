@@ -25,7 +25,6 @@ from hierarchical_multiagent_langgraph.agent_registry import (
     TaskPriority,
 )
 from langchain_core.tools import tool
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph_base_ros.chat_template_render import Messages
 from langgraph_base_ros.langgraph_base import LangGraphBase
@@ -718,7 +717,9 @@ class SupervisorManager(LangGraphBase):
         )
         workflow.add_edge('finalize_conversation', END)
 
-        # Compile the graph with memory persistence
-        memory = MemorySaver()
-        self.graph = workflow.compile(checkpointer=memory)  # type: ignore[assignment]
+        # Compile the graph. No checkpointer: finalize_conversation already
+        # resets memory and step count on every turn, so there is no
+        # cross-call conversational state to persist, and MemorySaver would
+        # otherwise accumulate checkpoints in RAM for the lifetime of the node.
+        self.graph = workflow.compile()
         self._log_info('Supervisor graph compiled successfully')
