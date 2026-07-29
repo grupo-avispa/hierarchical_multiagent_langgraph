@@ -314,12 +314,12 @@ class GetObjectRegionNode(Node):
         request.filters = filters
         request.refine_rag = enable_refinement
 
-        # Call service
+        # Call service. Client.call() is the blocking variant: it already
+        # returns the response (or None on timeout), not a Future.
         self.get_logger().info(f'Calling RAG service with query: "{query}"')
-        future = self._rag_client.call(request)
-        print(future)
+        response = self._rag_client.call(request, timeout_sec=timeout)
 
-        if future is None:
+        if response is None:
             return {
                 'success': False,
                 'status': 'timeout',
@@ -330,7 +330,7 @@ class GetObjectRegionNode(Node):
 
         # Process response
         documents = []
-        for doc in future.results:
+        for doc in response.results:
             documents.append({
                 'content': doc.content,
                 'score': doc.score if hasattr(doc, 'score') else 0.0
@@ -338,14 +338,14 @@ class GetObjectRegionNode(Node):
 
         result = {
             'success': True,
-            'status': future.status,
-            'total_results': future.total_results,
+            'status': response.status,
+            'total_results': response.total_results,
             'documents': documents
         }
 
         # Add refinement if enabled and available
-        if enable_refinement and future.results:
-            result['refinement'] = future.results[0].content
+        if enable_refinement and response.results:
+            result['refinement'] = response.results[0].content
 
         self.get_logger().info(f'RAG service returned {future.total_results} results')
         return result
@@ -370,7 +370,7 @@ class GetObjectRegionNode(Node):
 
         """
         # Step 1: Generate random goals in the region
-        if not self._generate_random_goals_client.wait_for_service(timeout_sec=5.0):
+        if not self._generate_random_goals_client.wait_for_service(timeout_sec=timeout):
             return {
                 'success': False,
                 'message': 'Generate random goals service not available'
@@ -385,7 +385,7 @@ class GetObjectRegionNode(Node):
         goal_request.border = 0.0
 
         self.get_logger().info(f'Generating goals for region: {region_name}')
-        goal_response = self._generate_random_goals_client.call(goal_request)
+        goal_response = self._generate_random_goals_client.call(goal_request, timeout_sec=timeout)
 
         if goal_response is None:
             return {
@@ -403,7 +403,7 @@ class GetObjectRegionNode(Node):
         self.get_logger().info(f'Generated {goals_count} goals for region {region_name}')
 
         # Step 2: Navigate to the generated goals
-        if not self._navigate_action_client.wait_for_server(timeout_sec=10.0):
+        if not self._navigate_action_client.wait_for_server(timeout_sec=timeout):
             return {
                 'success': False,
                 'message': 'Navigation action server not available',
@@ -417,7 +417,6 @@ class GetObjectRegionNode(Node):
 
         self.get_logger().info(f'Starting navigation to region: {region_name}')
         goal_result = self._navigate_action_client.send_goal(nav_goal)
-        print(goal_result)
         if goal_result is None:
             return {
                 'success': False,
