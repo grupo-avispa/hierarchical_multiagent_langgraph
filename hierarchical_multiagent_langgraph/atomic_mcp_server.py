@@ -357,7 +357,7 @@ class AtomicToolsNode(Node):
         if enable_refinement and response.results:
             result['refinement'] = response.results[0].content
 
-        self.get_logger().info(f'RAG service returned {future.total_results} results')
+        self.get_logger().info(f'RAG service returned {response.total_results} results')
         return result
 
     def move_to_region(self, region_name: str, number_of_goals: int = 1, timeout: float = 60.0):
