@@ -304,21 +304,6 @@ class AgentRegistry:
                 None
             )
 
-    def remove_running(self, agent_id: int) -> None:
-        """
-        Remove a running agent by its ID.
-
-        Parameters
-        ----------
-        agent_id : int
-            The unique identifier of the agent to remove.
-
-        """
-        with self._lock:
-            self._running = [
-                a for a in self._running if a.agent_id != agent_id
-            ]
-
     def move_to_finished(self, agent_id: int, result: FinishedAgentsState) -> None:
         """
         Move an agent from running to finished state atomically.
@@ -340,21 +325,41 @@ class AgentRegistry:
             ]
             self._finished.append(result)
 
-    def add_finished(self, result: FinishedAgentsState) -> None:
+    def cancel_running(self, agent_id: int, result: FinishedAgentsState) -> bool:
         """
-        Add a finished agent result directly.
+        Atomically move a running agent to finished, guarding against races.
 
-        Used when an agent is cancelled and needs to be marked as finished
-        without going through the normal running→finished transition.
+        Used by cancellation flows where the running agent may finish on
+        its own (via ``move_to_finished``) during a slow network operation
+        (e.g. stopping a behavior tree) that runs before this call. Checking
+        membership and mutating the lists under a single lock prevents the
+        agent from being recorded twice in ``_finished`` with contradictory
+        statuses.
 
         Parameters
         ----------
+        agent_id : int
+            The unique identifier of the agent to cancel.
         result : FinishedAgentsState
-            The finished agent state with execution results.
+            The finished agent state to record if the agent is still running.
+
+        Returns
+        -------
+        bool
+            True if the agent was running and has been moved to finished.
+            False if the agent had already finished on its own, in which
+            case no duplicate entry is added.
 
         """
         with self._lock:
+            target = next(
+                (a for a in self._running if a.agent_id == agent_id), None
+            )
+            if target is None:
+                return False
+            self._running.remove(target)
             self._finished.append(result)
+            return True
 
     def get_agents_context(self, max_finished_in_context: int = 5) -> list[dict]:
         """

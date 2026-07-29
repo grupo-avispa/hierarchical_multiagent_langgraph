@@ -429,15 +429,25 @@ class SupervisorManager(LangGraphBase):
             else:
                 target.coroutine_handler.cancel()
 
-            # Phase 3: Update registry (thread-safe mutation)
-            supervisor.registry.remove_running(agent_id)
+            # Phase 3: Update registry (thread-safe mutation). Use the atomic
+            # cancel_running() instead of remove_running()+add_finished() to
+            # avoid a duplicate finished entry if the agent completed on its
+            # own (via move_to_finished) during the network I/O above.
             finished_state = FinishedAgentsState(
                 agent_id=agent_id,
                 input_prompt=query,
                 agent_result='Agent execution was cancelled by supervisor.',
                 status=AgentStatus.FAILURE
             )
-            supervisor.registry.add_finished(finished_state)
+            was_cancelled = supervisor.registry.cancel_running(agent_id, finished_state)
+
+            if not was_cancelled:
+                message = (
+                    f'Agent {agent_id} had already finished on its own '
+                    f'(was working on: {query})'
+                )
+                supervisor._log_info(message)
+                return message
 
             message = (
                 f'Agent {agent_id} deleted successfully '
