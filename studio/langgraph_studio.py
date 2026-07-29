@@ -26,15 +26,30 @@ from langgraph_base_ros.ollama_utils import Ollama
 
 
 async def make_graph():
-    # Get the templates directory path relative to this file
-    current_dir = Path(__file__).parent
-    templates_path = str(current_dir.parent / 'templates')
+    # Get the templates and params directories relative to this file
+    package_dir = Path(__file__).parent.parent
+    templates_path = package_dir / 'templates'
+    params_path = package_dir / 'params'
 
-    with open(templates_path + '/system_prompt.jinja', 'r') as f:
-        system_prompt = f.read()
+    # Configuration for the SinglePurposeAgents created by the supervisor,
+    # mirroring the defaults declared in main.py's _SPA_PARAM_DEFS.
+    spa_params = {
+        'mcp_servers_config': str(params_path / 'spa_mcp.json'),
+        'system_prompt_file': str(templates_path / 'agent_system_prompt.jinja'),
+        'template_type': 'qwen3',
+        'template_file': str(templates_path / 'qwen3.jinja'),
+        'model': 'qwen3:0.6b',
+        'tool_call_pattern': '<tool_call>(.*?)</tool_call>',
+        'available_tools': ['execute_behavior_tree'],
+        'max_steps': 5,
+        'think': False,
+    }
 
     graph_manager = SupervisorManager(
         ollama_agent=Ollama(model='gpt-oss:20b'),
-        system_prompt=system_prompt)
+        system_prompt_path=str(templates_path / 'supervisor_system_prompt.jinja'),
+        spa_params=spa_params,
+    )
+    await graph_manager.ollama_agent.retrieve_tools(graph_manager.supervisor_tools)
     await graph_manager.make_graph()
     return graph_manager.graph
