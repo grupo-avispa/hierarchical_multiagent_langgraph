@@ -14,6 +14,7 @@ Key components:
 """
 
 import asyncio
+from collections import deque
 from dataclasses import dataclass, field
 from enum import IntEnum
 from threading import Event, Lock
@@ -140,19 +141,29 @@ class AgentRegistry:
         Queue of created but not-yet-started agents.
     _running : list[RunningAgentsState]
         Agents currently executing their tasks.
-    _finished : list[FinishedAgentsState]
-        Completed agents with results.
+    _finished : deque[FinishedAgentsState]
+        Completed agents with results. Bounded to ``max_finished`` entries;
+        oldest results are evicted automatically once the limit is reached.
     _id_counter : int
         Auto-incrementing counter for unique agent IDs.
 
     """
 
-    def __init__(self) -> None:
-        """Initialize the registry with empty lists, counter at 1, and pending event."""
+    def __init__(self, max_finished: int = 20) -> None:
+        """
+        Initialize the registry with empty lists, counter at 1, and pending event.
+
+        Parameters
+        ----------
+        max_finished : int
+            Maximum number of finished agents retained in history. Oldest
+            entries are evicted once the limit is exceeded. Defaults to 20.
+
+        """
         self._lock = Lock()
         self._pending: list[AgentTask] = []
         self._running: list[RunningAgentsState] = []
-        self._finished: list[FinishedAgentsState] = []
+        self._finished: deque[FinishedAgentsState] = deque(maxlen=max_finished)
         self._id_counter: int = 1
         # Event signaled when new pending agents are available
         self._pending_event = Event()
@@ -345,12 +356,19 @@ class AgentRegistry:
         with self._lock:
             self._finished.append(result)
 
-    def get_agents_context(self) -> list[dict]:
+    def get_agents_context(self, max_finished_in_context: int = 5) -> list[dict]:
         """
         Build a context list of all agents for system prompt rendering.
 
-        Returns a snapshot of running and finished agents as dictionaries
-        suitable for Jinja2 template rendering.
+        Returns a snapshot of all running agents plus only the most recent
+        finished ones, so the supervisor's system prompt does not grow
+        unbounded as more tasks complete over the node's lifetime.
+
+        Parameters
+        ----------
+        max_finished_in_context : int
+            Maximum number of most-recent finished agents to include.
+            Defaults to 5.
 
         Returns
         -------
@@ -369,6 +387,7 @@ class AgentRegistry:
                 }
                 for agent in self._running
             ]
+            recent_finished = list(self._finished)[-max_finished_in_context:]
             agents_list.extend([
                 {
                     'id': agent.agent_id,
@@ -376,7 +395,7 @@ class AgentRegistry:
                     'result': agent.agent_result,
                     'status': agent.status
                 }
-                for agent in self._finished
+                for agent in recent_finished
             ])
         return agents_list
 

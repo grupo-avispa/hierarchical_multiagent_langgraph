@@ -101,6 +101,8 @@ class SupervisorManager(LangGraphBase):
         system_prompt_path: str | None = None,
         spa_params: dict | None = None,
         agent_timeout: float = 120.0,
+        max_finished_history: int = 20,
+        max_agents_in_context: int = 5,
     ) -> None:
         """
         Initialize the Supervisor Manager.
@@ -130,6 +132,12 @@ class SupervisorManager(LangGraphBase):
         agent_timeout : float
             Maximum time in seconds for a single agent
             execution before it is forcefully terminated. Defaults to 120.0.
+        max_finished_history : int
+            Maximum number of finished agents retained in the registry's
+            history before the oldest ones are evicted. Defaults to 20.
+        max_agents_in_context : int
+            Maximum number of most-recent finished agents injected into the
+            supervisor's system prompt on each query. Defaults to 5.
 
         Raises
         ------
@@ -150,8 +158,11 @@ class SupervisorManager(LangGraphBase):
             raise ValueError('spa_params must be provided to SupervisorManager.')
         self.spa_params = spa_params
         self.ollama_agent: Ollama = self.ollama_agent
-        # Thread-safe registry for agent lifecycle management
-        self.registry = AgentRegistry()
+        # Thread-safe registry for agent lifecycle management, bounded to avoid
+        # unbounded growth of the finished-agents history (see max_finished_history).
+        self.registry = AgentRegistry(max_finished=max_finished_history)
+        # Maximum number of finished agents shown to the LLM in the system prompt
+        self.max_agents_in_context = max_agents_in_context
         # Maximum time in seconds for a single agent execution
         self.agent_timeout = agent_timeout
         # Agent executor for running agents in background threads
@@ -491,8 +502,11 @@ class SupervisorManager(LangGraphBase):
             The initialized conversation state with system and user messages.
 
         """
-        # Build context about current agents from registry
-        agents_list = self.registry.get_agents_context()
+        # Build context about current agents from registry, limited to the
+        # most recent finished agents to keep the system prompt bounded.
+        agents_list = self.registry.get_agents_context(
+            max_finished_in_context=self.max_agents_in_context
+        )
 
         # Create initial context state with rendered system prompt
         sys_message = self._render_system_prompt(agents_context=agents_list)

@@ -155,7 +155,9 @@ class HierarchicalMultiagent(LangGraphRosBase):
             max_steps=self.max_steps,
             system_prompt_path=self.system_prompt_file,
             spa_params=self.spa_params,
-            agent_timeout=self.agent_timeout
+            agent_timeout=self.agent_timeout,
+            max_finished_history=self.max_finished_history,
+            max_agents_in_context=self.max_agents_in_context
         )
 
         # Retrieve tools for Ollama agent
@@ -366,6 +368,21 @@ class HierarchicalMultiagent(LangGraphRosBase):
             'agent_timeout').get_parameter_value().double_value
         self.get_logger().info(
             f'The parameter agent_timeout is set to: [{self.agent_timeout}]')
+
+        # Declare and retrieve the finished-agents history retention limits
+        self.declare_parameter('max_finished_history', 20)
+        self.max_finished_history = self.get_parameter(
+            'max_finished_history').get_parameter_value().integer_value
+        self.get_logger().info(
+            f'The parameter max_finished_history is set to: '
+            f'[{self.max_finished_history}]')
+
+        self.declare_parameter('max_agents_in_context', 5)
+        self.max_agents_in_context = self.get_parameter(
+            'max_agents_in_context').get_parameter_value().integer_value
+        self.get_logger().info(
+            f'The parameter max_agents_in_context is set to: '
+            f'[{self.max_agents_in_context}]')
 
 
 def main(args=None) -> None:
