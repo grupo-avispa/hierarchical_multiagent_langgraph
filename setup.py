@@ -24,15 +24,15 @@ setup(
     ],
     install_requires=[
         'setuptools',
-        'empy',
+        'fastmcp',
         'jinja2',
         'langchain-core',
         'langchain-ollama',
         'langgraph',
         'langgraph-cli[inmem]',
         'langsmith',
-        'lark',
-        'numpy'
+        'ollama',
+        'python-dotenv',
     ],
     zip_safe=True,
     maintainer='Alberto Tudela',

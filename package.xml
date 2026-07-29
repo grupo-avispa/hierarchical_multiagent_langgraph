@@ -12,6 +12,11 @@
 
   <depend>rclpy</depend>
   <depend>langgraph_base_ros</depend>
+  <depend>llm_interactions_msgs</depend>
+  <depend>nav2_msgs</depend>
+  <depend>audio_common_msgs</depend>
+  <depend>object_with_region</depend>
+  <depend>semantic_navigation_msgs</depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
