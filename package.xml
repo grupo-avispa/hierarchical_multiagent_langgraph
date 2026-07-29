@@ -5,7 +5,7 @@
   <version>1.0.0</version>
   <description>Hierarchical multi-agent system where a Supervisor coordinates multiple Single-Purpose Agents (SPAs) to execute complex tasks.</description>
   <maintainer email="ajtudela@gmail.com">Alberto Tudela</maintainer>
-  <license>TODO: License declaration</license>
+  <license>Apache-2.0</license>
   <author email="ajtudela@gmail.com">Alberto Tudela</author>
   <author email="opfernandez@uma.es">Óscar Pons Fernández</author>
   <author email="jgaleas@uma.es">José Galeas Merchán</author>

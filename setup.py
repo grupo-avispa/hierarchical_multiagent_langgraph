@@ -39,7 +39,7 @@ setup(
     maintainer_email='ajtudela@gmail.com',
     description='Hierarchical multi-agent system where a Supervisor coordinates '
     'multiple Single-Purpose Agents (SPAs) to execute complex tasks.',
-    license='TODO: License declaration',
+    license='Apache-2.0',
     extras_require={
         'test': [
             'pytest',
