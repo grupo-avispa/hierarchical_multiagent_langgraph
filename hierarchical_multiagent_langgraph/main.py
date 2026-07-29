@@ -20,7 +20,8 @@ This module implements a hierarchical multi-agent system using LangGraph
 and ROS2. It manages a supervisor agent that coordinates multiple specialized
 single-purpose agents (SPAs) for complex task execution. The supervisor
 decomposes high-level user queries into sub-tasks and delegates them to
-appropriate agents, then synthesizes their responses.
+appropriate agents; results are tracked in the AgentRegistry and logged,
+but are not synthesized into a final response.
 
 Main Components:
     - HierarchicalMultiagent: Main ROS2 node managing the supervisor and agents.
@@ -269,65 +270,34 @@ class HierarchicalMultiagent(LangGraphRosBase):
 
     def agent_callback(self, request, response):
         """
-        ROS2 service callback: process user queries asynchronously.
+        ROS2 service callback: run the supervisor's graph for a user query.
 
-        Implements CallAgent service endpoint. Routes incoming user queries to
-        supervisor's LangGraph workflow for asynchronous processing. Submits query
-        to background execution without waiting for completion.
+        This callback blocks: `_process_graph` calls `run_until_complete` on
+        the supervisor's LangGraph workflow, so the calling executor thread
+        is occupied for the full duration of the supervisor's LLM inference
+        (typically tens of seconds), not just until the query is queued. The
+        service is also registered with a `MutuallyExclusiveCallbackGroup`,
+        so concurrent requests are serialized rather than handled in
+        parallel by the `MultiThreadedExecutor`.
 
-        Request Fields:
-            - query (str): User's natural language query/task
-            - response_needed (bool): Deprecated. Currently ignored; all queries
-                processed asynchronously for non-blocking ROS2 service behavior.
-
-        Execution Flow:
-            1. Extract query from request.query
-            2. Log incoming query at DEBUG level
-            3. Create InputState dictionary with user_prompt key
-            4. Set fixed thread_id='supervisor' for checkpoint context
-            5. Call _process_graph(input_state, thread_id)
-            6. Return immediately with success message
-            7. Supervisor processes graph in background (may create agents, execute tools)
-            8. Results logged/printed but not returned to caller
-
-        Thread ID Management:
-            - Uses fixed thread_id='supervisor' for all service calls
-            - Maintains supervisor checkpoint context across multiple calls
-            - Enables checkpoint persistence and state recovery from ROS2 node lifetime
-
-        Response Population:
-            - response.agent_response set to fixed string: 'Query submitted for processing'
-            - Indicates query was accepted and queued, not that processing completed
-            - Client should not rely on response_field for task results
-
-        Logging:
-            - Logs incoming query at DEBUG level
-            - Does not log processing time (asynchronous execution)
-            - Results printed to logger by supervisor in background
+        The response does not carry the supervisor's result: agent creation,
+        execution and any tool calls happen as a side effect of running the
+        graph, but `finalize_conversation` only logs a summary -- it does
+        not synthesize a response -- so `agent_response` is always the same
+        fixed acknowledgement string regardless of outcome.
 
         Parameters
         ----------
         request : CallAgent.Request
-            Service request with query string.
+            Service request with the user's query string.
         response : CallAgent.Response
             Service response object to populate.
 
         Returns
         -------
         CallAgent.Response
-            Response with fixed agent_response string.
-
-        Side Effects:
-            - Queues supervisor graph processing in event loop
-            - Does not block ROS2 executor
-            - Eventually modifies agent_lists (via background timer)
-            - Logs query and status
-
-        Note:
-            Non-blocking service design allows ROS2 MultiThreadedExecutor to handle
-            multiple concurrent requests without blocking on long-running graph
-            execution. Graph processing happens in dedicated event loop thread managed
-            by _agent_execution_timer_callback.
+            Response with a fixed `agent_response` string; it does not
+            reflect the supervisor's actual outcome.
 
         """
         user_query = request.query
