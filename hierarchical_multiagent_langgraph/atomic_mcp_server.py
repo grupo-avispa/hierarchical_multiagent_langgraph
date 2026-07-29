@@ -138,13 +138,17 @@ class GetObjectRegionNode(Node):
             )
             start_time = time.time()
             rate = self.create_rate(10.0)  # 10 Hz
-
-            while time.time() - start_time < self.objects_timeout:
-                with self.objects_lock:
-                    if self.objects is not None:
-                        current_objects = self.objects
-                        break
-                rate.sleep()
+            try:
+                while time.time() - start_time < self.objects_timeout:
+                    with self.objects_lock:
+                        if self.objects is not None:
+                            current_objects = self.objects
+                            break
+                    rate.sleep()
+            finally:
+                # create_rate() registers an internal timer on the node that
+                # is never cleaned up automatically; destroy it explicitly.
+                self.destroy_rate(rate)
 
             if current_objects is None:
                 self.get_logger().warn(
