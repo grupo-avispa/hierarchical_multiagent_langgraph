@@ -792,6 +792,7 @@ async def get_weather(city: str) -> str:
 
 def ros_spin_thread():
     """Thread to execute ROS spin with MultiThreadedExecutor."""
+    executor = None
     try:
         executor = MultiThreadedExecutor()
         executor.add_node(ros_node)
@@ -799,7 +800,8 @@ def ros_spin_thread():
     except KeyboardInterrupt:
         pass
     finally:
-        executor.shutdown()
+        if executor is not None:
+            executor.shutdown()
 
 
 def main(args=None):

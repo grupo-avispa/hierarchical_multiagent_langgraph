@@ -29,6 +29,7 @@ Main Components:
       by an event-driven consumer thread (no polling timer).
 """
 
+import traceback
 from typing import Any
 
 from hierarchical_multiagent_langgraph.supervisor import (
@@ -464,8 +465,11 @@ def main(args=None) -> None:
 
         # Spin the node to process callbacks
         executor.spin()
-    except (KeyboardInterrupt, Exception, ExternalShutdownException) as e:
+    except (KeyboardInterrupt, ExternalShutdownException) as e:
         print(f'Shutting down agent node due to: {e}')
+    except Exception as e:
+        print(f'Shutting down agent node due to unexpected error: {e}')
+        traceback.print_exc()
     finally:
         if agent is not None:
             # Stop the event-driven consumer thread before destroying the node
