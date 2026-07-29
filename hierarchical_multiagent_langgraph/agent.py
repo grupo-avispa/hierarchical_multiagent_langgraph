@@ -84,7 +84,9 @@ class SinglePurposeAgent(LangGraphBase):
     status : AgentStatus
         Current execution state (IDLE, RUNNING, SUCCESS, FAILURE).
     lang_tools : list
-        Tools available to agent, loaded from configuration.
+        LangChain-style tools available to the agent, in addition to any
+        MCP-based tools from mcp_client. Currently always empty: nothing in
+        this class populates it (see the ``LANGGRAPH TOOLS`` section below).
     sys_prompt : str
         System prompt from file guiding agent behavior and reasoning.
     ollama_agent : Ollama
@@ -493,16 +495,6 @@ class SinglePurposeAgent(LangGraphBase):
 
     # ========== LANGGRAPH TOOLS ==========
 
-    # If needed, can add more tools here that the agent can call during its reasoning process.
-    # Both LangChain-style and MCP-based tools are supported.
-    # Define langchain tools as in the following example:
-    # @staticmethod
-    # @tool('your_tool_name',
-    #       description='Description of what the tool does and when to use it.',
-    #       args_schema={
-    #           your_arg_schema_here: 'Description of the argument and its expected format.',
-    #       })
-    # def your_tool_name(your_arg_schema_here: str) -> str:
-    #     """Docstring for your tool function."""
-    #     result = f'Processed argument: {your_arg_schema_here}'
-    #     return result
+    # Additional LangChain-style tools (decorated with @tool) can be added
+    # here for the agent to call during its reasoning loop, alongside the
+    # MCP-based tools already available through mcp_client.

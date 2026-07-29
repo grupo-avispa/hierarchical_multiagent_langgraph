@@ -203,21 +203,6 @@ class AgentRegistry:
         # Signal the consumer thread that work is available
         self._pending_event.set()
 
-    def pop_pending(self) -> AgentTask | None:
-        """
-        Pop the next pending agent task from the queue.
-
-        Returns
-        -------
-        AgentTask | None
-            The next pending task, or None if the queue is empty.
-
-        """
-        with self._lock:
-            if self._pending:
-                return self._pending.pop(0)
-        return None
-
     def wait_for_pending(self, timeout: float | None = None) -> bool:
         """
         Block until a pending agent is available or timeout expires.

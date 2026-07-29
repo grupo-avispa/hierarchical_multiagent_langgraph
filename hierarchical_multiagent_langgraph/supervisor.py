@@ -66,11 +66,13 @@ class SupervisorManager(LangGraphBase):
         2. analyze_task: LLM supervisor analyzes the task and decides on agent actions.
         3. route_on_tool_call: Routes supervisor's tool calls
             (create_agent, delete_agent, skip_agent).
-        4. finalize_conversation: Aggregates results from all agents and synthesizes response.
+        4. finalize_conversation: Logs a summary of agent states. Does not
+            synthesize a response from agent results.
 
     Thread Safety:
-        All agent lists (pending, running, finished) are protected by agent_lists_lock to
-        ensure safe concurrent access from multiple agent execution threads.
+        Agent lifecycle state (pending, running, finished) is protected by
+        AgentRegistry's internal lock, ensuring safe concurrent access from
+        multiple agent execution threads.
 
     Attributes
     ----------
@@ -672,7 +674,6 @@ class SupervisorManager(LangGraphBase):
         self.messages_count = len(state['messages'])
         self._log_info(
             f'SUPERVISOR: FINAL STEP Total messages in conversation: {self.messages_count}')
-        # await self.current_task
         return state
 
     # ========== GRAPH GENERATION ==========

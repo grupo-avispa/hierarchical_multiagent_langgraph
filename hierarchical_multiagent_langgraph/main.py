@@ -72,18 +72,19 @@ class HierarchicalMultiagent(LangGraphRosBase):
         1. ROS2 service receives user query (CallAgent request).
         2. Query forwarded to supervisor's LangGraph workflow.
         3. Supervisor decides to create/delete agents based on LLM reasoning.
-        4. Created agents queued in pending_agents_list via supervisor tools.
+        4. Created agents queued in the AgentRegistry via supervisor tools.
         5. AgentExecutor's consumer thread detects pending agents via event.
         6. Each agent runs in a dedicated thread with its own asyncio event loop.
-        7. Results collected asynchronously from completed agents.
-        8. Supervisor synthesizes final response from agent results.
+        7. Results collected from completed agents into the AgentRegistry.
+        8. finalize_conversation logs a summary of agent states (it does not
+           synthesize a response from agent results).
         9. Response returned via ROS2 service callback.
 
     Thread Safety:
-        Agent lists are protected by agent_lists_lock. Agent execution runs in
-        separate threads with independent event loops to prevent blocking the
-        ROS2 executor. The consumer thread uses threading.Event for zero-latency
-        wake-up when new agents are enqueued.
+        Agent lifecycle state is protected by AgentRegistry's internal lock.
+        Agent execution runs in separate threads with independent event loops
+        to prevent blocking the ROS2 executor. The consumer thread uses
+        threading.Event for zero-latency wake-up when new agents are enqueued.
 
     Attributes
     ----------
