@@ -140,6 +140,21 @@ def generate_launch_description():
         arguments=['--ros-args', '--log-level', log_level],
     )
 
+    # Prepare the atomic MCP server node, which exposes the tools
+    # (charge_robot, move_to_region, call_rag, say_text, get_object_region,
+    # get_weather) that atomic_params.yaml points the agents to. It does not
+    # take parameters from params_file: 'objects_topic', 'objects_timeout',
+    # 'mcp_host' and 'mcp_port' are declared with their own defaults and can
+    # be overridden with a separate params file for this node if needed.
+    atomic_mcp_server_node = Node(
+        package='hierarchical_multiagent_langgraph',
+        executable='atomic_mcp_server',
+        name='get_object_region_mcp',
+        output='screen',
+        prefix=[venv_python, ' -u '],
+        arguments=['--ros-args', '--log-level', log_level],
+    )
+
     return LaunchDescription([
         declare_params_file_arg,
         declare_mcp_servers_file_arg,
@@ -150,4 +165,5 @@ def generate_launch_description():
         declare_agent_sys_prompt_file_arg,
         declare_log_level_arg,
         langgraph_agent_node,
+        atomic_mcp_server_node,
     ])

@@ -48,6 +48,7 @@ setup(
     entry_points={
         'console_scripts': [
             'node = ' + package_name + '.main:main',
+            'atomic_mcp_server = ' + package_name + '.atomic_mcp_server:main',
         ],
     },
 )

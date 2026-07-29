@@ -53,9 +53,13 @@ class GetObjectRegionNode(Node):
         # Configurable parameters
         self.declare_parameter('objects_topic', '/object_detection/objects_with_region')
         self.declare_parameter('objects_timeout', 2.5)  # seconds
+        self.declare_parameter('mcp_host', '0.0.0.0')
+        self.declare_parameter('mcp_port', 8988)
 
         self.objects_topic = self.get_parameter('objects_topic').value
         self.objects_timeout = self.get_parameter('objects_timeout').value
+        self.mcp_host = self.get_parameter('mcp_host').value
+        self.mcp_port = self.get_parameter('mcp_port').value
 
         # Store received objects
         self.objects = None
@@ -810,7 +814,7 @@ def main(args=None):
 
     # Run MCP server with HTTP transport
     try:
-        mcp.run(transport='http', host='0.0.0.0', port=8988)
+        mcp.run(transport='http', host=ros_node.mcp_host, port=ros_node.mcp_port)
     except KeyboardInterrupt:
         pass
     finally:
