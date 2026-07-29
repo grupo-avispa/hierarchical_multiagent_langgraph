@@ -32,10 +32,17 @@ import asyncio
 from collections import deque
 from dataclasses import dataclass, field
 from enum import IntEnum
-from threading import Event, Lock
+import itertools
+import queue
+from threading import Lock
 
 from hierarchical_multiagent_langgraph.agent import AgentStatus, SinglePurposeAgent
 from langgraph_base_ros.chat_template_render import Messages
+
+# Priority used for the internal shutdown sentinel put on the pending queue.
+# Lower than TaskPriority.HIGH so a shutdown request is always picked up by a
+# free worker ahead of any real, still-pending task.
+_SHUTDOWN_SENTINEL_PRIORITY = -1
 
 
 class TaskPriority(IntEnum):
@@ -151,9 +158,13 @@ class AgentRegistry:
     Attributes
     ----------
     _lock : Lock
-        Mutex protecting concurrent access to agent lists.
-    _pending : list[AgentTask]
-        Queue of created but not-yet-started agents.
+        Mutex protecting concurrent access to the running/finished lists.
+    _pending : queue.PriorityQueue
+        Thread-safe priority queue of created but not-yet-started agents.
+        Items are ``(priority, sequence, AgentTask | None)`` tuples; the
+        sequence number breaks priority ties in FIFO order and keeps
+        ``AgentTask`` (not orderable) out of tuple comparisons. A ``None``
+        task is a shutdown sentinel (see ``enqueue_shutdown_sentinel``).
     _running : list[RunningAgentsState]
         Agents currently executing their tasks.
     _finished : deque[FinishedAgentsState]
@@ -166,7 +177,7 @@ class AgentRegistry:
 
     def __init__(self, max_finished: int = 20) -> None:
         """
-        Initialize the registry with empty lists, counter at 1, and pending event.
+        Initialize the registry with empty structures and the ID counter at 1.
 
         Parameters
         ----------
@@ -176,12 +187,11 @@ class AgentRegistry:
 
         """
         self._lock = Lock()
-        self._pending: list[AgentTask] = []
+        self._pending: queue.PriorityQueue = queue.PriorityQueue()
+        self._pending_seq = itertools.count()
         self._running: list[RunningAgentsState] = []
         self._finished: deque[FinishedAgentsState] = deque(maxlen=max_finished)
         self._id_counter: int = 1
-        # Event signaled when new pending agents are available
-        self._pending_event = Event()
 
     def next_id(self) -> int:
         """
@@ -202,10 +212,11 @@ class AgentRegistry:
 
     def enqueue(self, task: AgentTask) -> None:
         """
-        Add a pending agent task to the queue and signal the consumer.
+        Add a pending agent task to the priority queue.
 
-        Appends the task under the lock and then sets the pending event
-        to wake any waiting consumer thread.
+        A worker blocked on ``get_pending()`` picks up the highest-priority
+        task (lowest ``TaskPriority`` value) as soon as one is available,
+        with no polling delay.
 
         Parameters
         ----------
@@ -213,62 +224,44 @@ class AgentRegistry:
             The agent task to enqueue for later execution.
 
         """
-        with self._lock:
-            self._pending.append(task)
-        # Signal the consumer thread that work is available
-        self._pending_event.set()
+        seq = next(self._pending_seq)
+        self._pending.put((int(task.priority), seq, task))
 
-    def wait_for_pending(self, timeout: float | None = None) -> bool:
+    def get_pending(self, timeout: float | None = None) -> AgentTask | None:
         """
-        Block until a pending agent is available or timeout expires.
+        Block until the next highest-priority task is available and return it.
 
         Parameters
         ----------
         timeout : float | None
-            Maximum time to wait in seconds. None waits indefinitely.
+            Maximum time to wait in seconds. None (the default, used by
+            worker threads) blocks indefinitely with no polling delay.
 
         Returns
         -------
-        bool
-            True if the event was set (pending agent available),
-            False if the timeout expired.
+        AgentTask | None
+            The next task to execute, in priority order. ``None`` means
+            either a shutdown sentinel was received (the caller, a worker
+            thread, should stop pulling further tasks) or ``timeout``
+            expired with nothing pending.
 
         """
-        return self._pending_event.wait(timeout=timeout)
+        try:
+            _, _, task = self._pending.get(timeout=timeout)
+        except queue.Empty:
+            return None
+        return task
 
-    def clear_pending_signal(self) -> None:
-        """Clear the pending signal after consuming pending agents."""
-        self._pending_event.clear()
-
-    def wake_pending(self) -> None:
+    def enqueue_shutdown_sentinel(self) -> None:
         """
-        Force-wake any thread waiting for pending agents.
+        Wake exactly one blocked worker so it can observe shutdown and exit.
 
-        Used during shutdown to unblock the consumer thread so it can
-        check the shutdown flag and exit cleanly.
+        The sentinel uses a priority lower than any real ``TaskPriority``, so
+        it is always picked up ahead of still-pending work. Called once per
+        worker thread when stopping the executor.
         """
-        self._pending_event.set()
-
-    def drain_all_pending(self) -> list[AgentTask]:
-        """
-        Drain all pending tasks sorted by priority (highest first).
-
-        Atomically removes all pending tasks from the queue and returns
-        them sorted by ascending ``TaskPriority`` value (lower value =
-        higher priority).
-
-        Returns
-        -------
-        list[AgentTask]
-            All previously pending tasks sorted by priority, or an
-            empty list if the queue was empty.
-
-        """
-        with self._lock:
-            tasks = list(self._pending)
-            self._pending.clear()
-        tasks.sort(key=lambda t: t.priority)
-        return tasks
+        seq = next(self._pending_seq)
+        self._pending.put((_SHUTDOWN_SENTINEL_PRIORITY, seq, None))
 
     def add_running(self, state: RunningAgentsState) -> None:
         """
@@ -415,12 +408,18 @@ class AgentRegistry:
         -------
         dict[str, list]
             Dictionary with keys 'pending', 'running', 'finished'
-            containing list copies.
+            containing list copies. 'pending' is sorted by priority.
 
         """
+        # queue.Queue guards its internal buffer with its own mutex, separate
+        # from self._lock; snapshot it under that mutex rather than draining it.
+        with self._pending.mutex:
+            pending_items = sorted(self._pending.queue)
+        pending = [task for _, _, task in pending_items if task is not None]
+
         with self._lock:
             return {
-                'pending': list(self._pending),
+                'pending': pending,
                 'running': list(self._running),
                 'finished': list(self._finished),
             }

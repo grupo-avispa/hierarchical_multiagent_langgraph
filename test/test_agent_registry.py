@@ -15,6 +15,9 @@
 
 """Unit tests for AgentRegistry: pure in-memory logic, no ROS or LLM needed."""
 
+import threading
+import time
+
 import pytest
 
 from hierarchical_multiagent_langgraph.agent_registry import (
@@ -39,37 +42,75 @@ def test_next_id_increments_and_starts_at_one():
     assert registry.next_id() == 3
 
 
-def test_drain_all_pending_sorts_by_priority():
-    """Pending tasks must be drained in ascending TaskPriority order (HIGH first)."""
+def test_get_pending_returns_tasks_in_priority_order():
+    """Pending tasks must be dispatched in ascending TaskPriority order (HIGH first)."""
     registry = AgentRegistry()
     registry.enqueue(_make_task(TaskPriority.LOW))
     registry.enqueue(_make_task(TaskPriority.HIGH))
     registry.enqueue(_make_task(TaskPriority.MEDIUM))
 
-    drained = registry.drain_all_pending()
+    drained = [registry.get_pending(timeout=1.0) for _ in range(3)]
 
     assert [t.priority for t in drained] == [
         TaskPriority.HIGH, TaskPriority.MEDIUM, TaskPriority.LOW]
     # The queue must be empty after draining.
-    assert registry.drain_all_pending() == []
+    assert registry.get_pending(timeout=0.05) is None
 
 
-def test_drain_all_pending_empty_queue_returns_empty_list():
-    """Draining an empty registry must return an empty list, not None or raise."""
+def test_get_pending_same_priority_is_fifo():
+    """Tasks with equal priority must be dispatched in the order they were enqueued."""
     registry = AgentRegistry()
-    assert registry.drain_all_pending() == []
+    first = _make_task(TaskPriority.MEDIUM)
+    second = _make_task(TaskPriority.MEDIUM)
+    registry.enqueue(first)
+    registry.enqueue(second)
+
+    assert registry.get_pending(timeout=1.0) is first
+    assert registry.get_pending(timeout=1.0) is second
 
 
-def test_pending_event_signals_and_clears():
-    """enqueue() must signal wait_for_pending(); clear_pending_signal() must reset it."""
+def test_get_pending_times_out_on_empty_queue():
+    """get_pending() with a timeout on an empty queue must return None, not block forever."""
     registry = AgentRegistry()
-    assert registry.wait_for_pending(timeout=0) is False
+    assert registry.get_pending(timeout=0.05) is None
 
-    registry.enqueue(_make_task(TaskPriority.MEDIUM))
-    assert registry.wait_for_pending(timeout=0) is True
 
-    registry.clear_pending_signal()
-    assert registry.wait_for_pending(timeout=0) is False
+def test_get_pending_blocks_with_no_polling_until_a_task_arrives():
+    """
+    get_pending() with no timeout must block until a task is enqueued, with no
+    polling delay once one becomes available (see [B9]).
+    """
+    registry = AgentRegistry()
+    received: list = []
+
+    def waiter():
+        received.append(registry.get_pending())
+
+    thread = threading.Thread(target=waiter, daemon=True)
+    thread.start()
+    time.sleep(0.05)
+    assert received == []  # still blocked, nothing enqueued yet
+
+    registry.enqueue(_make_task(TaskPriority.HIGH))
+    thread.join(timeout=1.0)
+
+    assert len(received) == 1
+    assert received[0].priority == TaskPriority.HIGH
+
+
+def test_enqueue_shutdown_sentinel_is_prioritized_over_pending_work():
+    """
+    A shutdown sentinel must be picked up before any real pending task, so
+    workers can exit promptly even with a backlog queued.
+    """
+    registry = AgentRegistry()
+    registry.enqueue(_make_task(TaskPriority.HIGH))
+    registry.enqueue_shutdown_sentinel()
+
+    assert registry.get_pending(timeout=1.0) is None
+    remaining = registry.get_pending(timeout=1.0)
+    assert remaining is not None
+    assert remaining.priority == TaskPriority.HIGH
 
 
 def test_find_running_returns_none_when_absent():
@@ -191,7 +232,7 @@ def test_get_summary_returns_independent_copies():
     summary['pending'].clear()
 
     # Mutating the returned copy must not affect the registry's internal queue.
-    assert len(registry.drain_all_pending()) == 1
+    assert registry.get_pending(timeout=1.0) is not None
 
 
 @pytest.mark.parametrize('priority', [TaskPriority.HIGH, TaskPriority.MEDIUM, TaskPriority.LOW])

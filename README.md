@@ -220,9 +220,9 @@ stateDiagram-v2
 ROS2 node that manages the system lifecycle:
 
 - Exposes `CallAgent` service to receive queries
-- Starts event-driven consumer thread for agent execution
+- Starts the agent executor's bounded worker thread pool
 - Initializes and configures the `SupervisorManager`
-- Manages multiple execution threads for agents
+- Bounds concurrent agent execution to `max_concurrent_agents` workers
 
 ### SupervisorManager (supervisor.py)
 
@@ -231,7 +231,7 @@ Orchestrates multi-agent coordination:
 - **LLM Tools**: `create_agent`, `delete_agent`, `skip_agent`
 - **State management**: Thread-safe registry for pending/running/finished agents
 - **LangGraph graph**: Analysis and decision workflow
-- **Event signaling**: `threading.Event` for zero-latency agent consumption
+- **Priority queue**: `queue.PriorityQueue` for zero-latency, priority-ordered agent dispatch
 
 ### SinglePurposeAgent (agent.py)
 
@@ -240,7 +240,7 @@ Specialized agent for individual tasks:
 - **States**: `IDLE`, `RUNNING`, `SUCCESS`, `FAILURE`
 - **MCP integration**: Access to external tools
 - **Own graph**: Independent reasoning cycle
-- **Isolation**: Separate event loop per agent
+- **Isolation**: Runs on whichever worker's event loop dispatches it
 
 ## Citation
 

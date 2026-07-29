@@ -26,8 +26,9 @@ but are not synthesized into a final response.
 Main Components:
     - HierarchicalMultiagent: Main ROS2 node managing the supervisor and agents.
     - SupervisorManager: Orchestrates the agent hierarchy and LangGraph workflow.
-    - Agent execution threads: Each agent runs in its own event loop, triggered
-      by an event-driven consumer thread (no polling timer).
+    - AgentExecutor: Bounded pool of worker threads (max_concurrent_agents)
+      that dispatch pending agents in priority order, each worker reusing
+      its own asyncio event loop across the agents it processes.
 """
 
 import traceback
@@ -89,9 +90,12 @@ class HierarchicalMultiagent(LangGraphRosBase):
         1. ROS2 service receives user query (CallAgent request).
         2. Query forwarded to supervisor's LangGraph workflow.
         3. Supervisor decides to create/delete agents based on LLM reasoning.
-        4. Created agents queued in the AgentRegistry via supervisor tools.
-        5. AgentExecutor's consumer thread detects pending agents via event.
-        6. Each agent runs in a dedicated thread with its own asyncio event loop.
+        4. Created agents queued in the AgentRegistry's priority queue via
+           supervisor tools.
+        5. A free AgentExecutor worker thread picks up the highest-priority
+           pending agent as soon as one is available (no polling delay).
+        6. The worker runs the agent on its own persistent asyncio event loop,
+           reused across the agents it processes in sequence.
         7. Results collected from completed agents into the AgentRegistry.
         8. finalize_conversation logs a summary of agent states (it does not
            synthesize a response from agent results).
@@ -99,9 +103,9 @@ class HierarchicalMultiagent(LangGraphRosBase):
 
     Thread Safety:
         Agent lifecycle state is protected by AgentRegistry's internal lock.
-        Agent execution runs in separate threads with independent event loops
-        to prevent blocking the ROS2 executor. The consumer thread uses
-        threading.Event for zero-latency wake-up when new agents are enqueued.
+        Agent execution runs in a bounded pool of worker threads
+        (max_concurrent_agents), each with an independent event loop, to
+        prevent blocking the ROS2 executor.
 
     Attributes
     ----------
@@ -134,7 +138,7 @@ class HierarchicalMultiagent(LangGraphRosBase):
         4. Retrieves tools available to supervisor from Ollama.
         5. Builds the supervisor's LangGraph workflow.
         6. Creates ROS2 service endpoint for receiving user queries.
-        7. Starts agent executor consumer thread (event-driven).
+        7. Starts the agent executor's bounded worker thread pool.
 
         After successful initialization, the node is ready to receive user queries
         via ROS2 service and manage the hierarchical multi-agent execution.
@@ -176,6 +180,7 @@ class HierarchicalMultiagent(LangGraphRosBase):
             agent_timeout=self.agent_timeout,
             max_finished_history=self.max_finished_history,
             max_agents_in_context=self.max_agents_in_context,
+            max_concurrent_agents=self.max_concurrent_agents,
             node_loop=self.loop
         )
 
@@ -188,7 +193,7 @@ class HierarchicalMultiagent(LangGraphRosBase):
         # Build the LangGraph workflow
         self.build_graph()
 
-        # Start the event-driven agent consumer thread
+        # Start the agent executor's bounded worker thread pool
         self.supervisor_manager.executor.start()
 
         self.get_logger().info('Hierarchical Multiagent LangGraph Node has been started.')
@@ -366,6 +371,14 @@ class HierarchicalMultiagent(LangGraphRosBase):
             f'The parameter max_agents_in_context is set to: '
             f'[{self.max_agents_in_context}]')
 
+        # Declare and retrieve the maximum number of concurrently executing agents
+        self.declare_parameter('max_concurrent_agents', 4)
+        self.max_concurrent_agents = self.get_parameter(
+            'max_concurrent_agents').get_parameter_value().integer_value
+        self.get_logger().info(
+            f'The parameter max_concurrent_agents is set to: '
+            f'[{self.max_concurrent_agents}]')
+
 
 def main(args=None) -> None:
     """
@@ -381,9 +394,9 @@ def main(args=None) -> None:
 
     Execution Model:
         - MultiThreadedExecutor allows ROS2 callbacks to run concurrently
-        - Agent consumer thread runs in background, triggered by events
+        - A bounded pool of worker threads (max_concurrent_agents) executes
+          pending agents in priority order as workers become free
         - Agent callback (agent_callback) handles service requests from multiple callers
-        - Multiple agents can execute in parallel via dedicated threads
 
     Error Handling:
         - KeyboardInterrupt: User pressed Ctrl+C (expected shutdown)
@@ -396,9 +409,9 @@ def main(args=None) -> None:
            - Creates supervisor manager
            - Builds LangGraph workflow
            - Registers ROS2 service
-           - Starts event-driven agent consumer thread
+           - Starts the agent executor's bounded worker thread pool
         2. Executes until shutdown
-        3. Cleanup: stops consumer thread, destroys node, shuts down rclpy
+        3. Cleanup: stops worker threads, destroys node, shuts down rclpy
 
     Parameters
     ----------
@@ -414,7 +427,7 @@ def main(args=None) -> None:
     Side Effects:
         - Initializes global ROS2 context (rclpy.init)
         - Creates HierarchicalMultiagent node
-        - Registers ROS2 service and starts consumer thread
+        - Registers ROS2 service and starts the worker thread pool
         - Blocks until shutdown (run forever in normal operation)
         - Prints shutdown reason to console
 
@@ -443,7 +456,7 @@ def main(args=None) -> None:
         traceback.print_exc()
     finally:
         if agent is not None:
-            # Stop the event-driven consumer thread before destroying the node
+            # Stop the agent executor's worker thread pool before destroying the node
             agent.supervisor_manager.executor.stop()
             agent.destroy_node()
         if rclpy.ok():

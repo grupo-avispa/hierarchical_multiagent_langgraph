@@ -119,6 +119,7 @@ class SupervisorManager(LangGraphBase):
         agent_timeout: float = 120.0,
         max_finished_history: int = 20,
         max_agents_in_context: int = 5,
+        max_concurrent_agents: int = 4,
         node_loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         """
@@ -155,6 +156,8 @@ class SupervisorManager(LangGraphBase):
         max_agents_in_context : int
             Maximum number of most-recent finished agents injected into the
             supervisor's system prompt on each query. Defaults to 5.
+        max_concurrent_agents : int
+            Maximum number of agents executing at the same time. Defaults to 4.
         node_loop : asyncio.AbstractEventLoop | None
             Event loop that owns ``ollama_agent.mcp_client``'s connection
             (typically the ROS node's main loop). Used by ``delete_agent`` to
@@ -189,10 +192,11 @@ class SupervisorManager(LangGraphBase):
         self.max_agents_in_context = max_agents_in_context
         # Maximum time in seconds for a single agent execution
         self.agent_timeout = agent_timeout
-        # Agent executor for running agents in background threads
+        # Agent executor for running agents in a bounded worker pool
         self.executor = AgentExecutor(
             registry=self.registry,
             agent_timeout=self.agent_timeout,
+            max_concurrent_agents=max_concurrent_agents,
             logger=self.logger,
         )
         # Load system prompt to attribute sys_prompt
