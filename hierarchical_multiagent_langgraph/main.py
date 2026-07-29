@@ -175,7 +175,8 @@ class HierarchicalMultiagent(LangGraphRosBase):
             spa_params=self.spa_params,
             agent_timeout=self.agent_timeout,
             max_finished_history=self.max_finished_history,
-            max_agents_in_context=self.max_agents_in_context
+            max_agents_in_context=self.max_agents_in_context,
+            node_loop=self.loop
         )
 
         # Retrieve tools for Ollama agent

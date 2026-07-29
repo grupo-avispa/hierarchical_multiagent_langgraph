@@ -119,6 +119,7 @@ class SupervisorManager(LangGraphBase):
         agent_timeout: float = 120.0,
         max_finished_history: int = 20,
         max_agents_in_context: int = 5,
+        node_loop: asyncio.AbstractEventLoop | None = None,
     ) -> None:
         """
         Initialize the Supervisor Manager.
@@ -154,6 +155,11 @@ class SupervisorManager(LangGraphBase):
         max_agents_in_context : int
             Maximum number of most-recent finished agents injected into the
             supervisor's system prompt on each query. Defaults to 5.
+        node_loop : asyncio.AbstractEventLoop | None
+            Event loop that owns ``ollama_agent.mcp_client``'s connection
+            (typically the ROS node's main loop). Used by ``delete_agent`` to
+            schedule MCP calls on the loop that actually owns the client,
+            instead of the loop of the agent being cancelled. Defaults to None.
 
         Raises
         ------
@@ -174,6 +180,8 @@ class SupervisorManager(LangGraphBase):
             raise ValueError('spa_params must be provided to SupervisorManager.')
         self.spa_params = spa_params
         self.ollama_agent: Ollama = self.ollama_agent
+        # Event loop that owns ollama_agent.mcp_client's connection.
+        self.node_loop = node_loop
         # Thread-safe registry for agent lifecycle management, bounded to avoid
         # unbounded growth of the finished-agents history (see max_finished_history).
         self.registry = AgentRegistry(max_finished=max_finished_history)
@@ -403,8 +411,18 @@ class SupervisorManager(LangGraphBase):
 
             query = target.input_prompt
 
-            # Phase 2: Perform network I/O WITHOUT holding the lock
-            if supervisor.ollama_agent.mcp_client is not None:
+            # Phase 2: Perform network I/O WITHOUT holding the lock.
+            # supervisor.ollama_agent.mcp_client is connected on
+            # supervisor.node_loop (the ROS node's main loop, see
+            # initialize_mcp_client() in langgraph_base_ros), NOT on the
+            # agent's own event loop -- scheduling the call on target.event_loop
+            # would run it on a loop that does not own the client's connection.
+            if supervisor.ollama_agent.mcp_client is not None and supervisor.node_loop is None:
+                supervisor._log_warning(
+                    f'SUPERVISOR: node_loop not configured; skipping stop_behavior_tree '
+                    f'for AGENT [{agent_id}].'
+                )
+            elif supervisor.ollama_agent.mcp_client is not None:
                 try:
                     supervisor._log_info(
                         'SUPERVISOR: Stopping behavior tree via MCP client...')
@@ -413,7 +431,7 @@ class SupervisorManager(LangGraphBase):
                             'stop_behavior_tree',
                             arguments={'execution_id': str(agent_id)}
                         ),
-                        target.event_loop
+                        supervisor.node_loop
                     )
                     result = stop_future.result(timeout=8.0)
                     supervisor._log_info(
