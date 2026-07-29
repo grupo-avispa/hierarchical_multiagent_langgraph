@@ -39,13 +39,13 @@ class ConcurrencyTracker:
         self.max_seen = 0
         self.dispatch_order: list[str] = []
 
-    def enter(self, name: str) -> None:
+    def record_enter(self, name: str) -> None:
         with self._lock:
             self._current += 1
             self.max_seen = max(self.max_seen, self._current)
             self.dispatch_order.append(name)
 
-    def exit(self, name: str) -> None:
+    def record_exit(self, name: str) -> None:
         with self._lock:
             self._current -= 1
 
@@ -59,11 +59,11 @@ class RecordingGraph:
         self.hold_time = hold_time
 
     async def ainvoke(self, initial_state):
-        self.tracker.enter(self.name)
+        self.tracker.record_enter(self.name)
         try:
             await asyncio.sleep(self.hold_time)
         finally:
-            self.tracker.exit(self.name)
+            self.tracker.record_exit(self.name)
         return {'messages': [{'role': 'assistant', 'content': 'done'}]}
 
 
@@ -138,8 +138,10 @@ def test_executor_bounds_concurrent_agent_execution():
 
 def test_executor_dispatches_high_priority_ahead_of_queued_low_priority():
     """
-    A high-priority agent enqueued while the single worker is busy must be
-    picked up before an already-queued, lower-priority agent (see [B9]).
+    A high-priority agent must preempt an already-queued lower-priority one.
+
+    Enqueued while the single worker is busy, it must still be picked up
+    before an already-queued, lower-priority agent (see [B9]).
     """
     registry = AgentRegistry()
     tracker = ConcurrencyTracker()

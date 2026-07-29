@@ -18,10 +18,9 @@
 import asyncio
 from unittest.mock import MagicMock
 
-import pytest
-
 from hierarchical_multiagent_langgraph.agent_registry import RunningAgentsState
 from hierarchical_multiagent_langgraph.supervisor import SupervisorManager
+import pytest
 
 
 @pytest.fixture
@@ -49,9 +48,10 @@ def _get_delete_agent_func(manager):
 
 def test_delete_agent_uses_node_loop_not_agent_loop(supervisor_manager, monkeypatch):
     """
-    delete_agent must schedule the stop_behavior_tree MCP call on the
-    supervisor's node_loop, which owns mcp_client's connection, rather than on
-    the agent's own event loop, which does not (see [B3]).
+    delete_agent must schedule the MCP call on the loop that owns the client.
+
+    supervisor.node_loop owns mcp_client's connection; the agent's own
+    event loop does not (see [B3]).
     """
     node_loop = asyncio.new_event_loop()
     agent_loop = asyncio.new_event_loop()
@@ -66,6 +66,7 @@ def test_delete_agent_uses_node_loop_not_agent_loop(supervisor_manager, monkeypa
     recorded_loops = []
 
     class FakeFuture:
+
         def result(self, timeout=None):
             return 'stopped'
 

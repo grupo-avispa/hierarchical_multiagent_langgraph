@@ -17,11 +17,10 @@
 
 import asyncio
 
-import pytest
-
 from hierarchical_multiagent_langgraph.agent import AgentStatus
 from hierarchical_multiagent_langgraph.agent_executor import AgentExecutor
 from hierarchical_multiagent_langgraph.agent_registry import AgentRegistry
+import pytest
 
 
 class FakeMcpClient:
@@ -114,9 +113,10 @@ def _initial_state():
 @pytest.mark.asyncio
 async def test_run_agent_keeps_single_mcp_connection_open():
     """
-    run_agent must open the MCP connection once and keep it open for the whole
-    execution, instead of reconnecting for the ping, tool retrieval, and every
-    tool call made inside the graph (see [B20]).
+    run_agent must keep a single MCP connection open for the whole execution.
+
+    Instead of reconnecting for the ping, tool retrieval, and every tool call
+    made inside the graph (see [B20]).
     """
     mcp_client = FakeMcpClient()
     agent = FakeAgent(agent_id=1, mcp_client=mcp_client, tool_call_count=3)

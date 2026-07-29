@@ -18,8 +18,6 @@
 import threading
 import time
 
-import pytest
-
 from hierarchical_multiagent_langgraph.agent_registry import (
     AgentRegistry,
     AgentTask,
@@ -27,6 +25,7 @@ from hierarchical_multiagent_langgraph.agent_registry import (
     RunningAgentsState,
     TaskPriority,
 )
+import pytest
 
 
 def _make_task(priority: TaskPriority) -> AgentTask:
@@ -77,8 +76,9 @@ def test_get_pending_times_out_on_empty_queue():
 
 def test_get_pending_blocks_with_no_polling_until_a_task_arrives():
     """
-    get_pending() with no timeout must block until a task is enqueued, with no
-    polling delay once one becomes available (see [B9]).
+    get_pending() with no timeout must block until a task is enqueued.
+
+    With no polling delay once one becomes available (see [B9]).
     """
     registry = AgentRegistry()
     received: list = []
@@ -100,8 +100,9 @@ def test_get_pending_blocks_with_no_polling_until_a_task_arrives():
 
 def test_enqueue_shutdown_sentinel_is_prioritized_over_pending_work():
     """
-    A shutdown sentinel must be picked up before any real pending task, so
-    workers can exit promptly even with a backlog queued.
+    A shutdown sentinel must be picked up before any real pending task.
+
+    So workers can exit promptly even with a backlog queued.
     """
     registry = AgentRegistry()
     registry.enqueue(_make_task(TaskPriority.HIGH))
@@ -157,8 +158,10 @@ def test_cancel_running_moves_agent_and_returns_true():
 
 def test_cancel_running_does_not_duplicate_already_finished_agent():
     """
-    cancel_running() must not add a duplicate finished entry if the agent already
-    finished on its own (e.g. via move_to_finished) before cancellation runs (see [B10]).
+    cancel_running() must not add a duplicate entry for an already-finished agent.
+
+    Covers the case where the agent finished on its own (e.g. via
+    move_to_finished) before cancellation runs (see [B10]).
     """
     registry = AgentRegistry()
     registry.add_running(RunningAgentsState(agent_id=9, input_prompt='task'))
@@ -181,8 +184,9 @@ def test_cancel_running_does_not_duplicate_already_finished_agent():
 
 def test_finished_history_is_bounded_by_max_finished():
     """
-    The finished-agents history must be bounded to max_finished entries;
-    oldest results are evicted automatically (see [B5]).
+    The finished-agents history must be bounded to max_finished entries.
+
+    Oldest results are evicted automatically (see [B5]).
     """
     registry = AgentRegistry(max_finished=3)
     for i in range(5):
@@ -198,8 +202,10 @@ def test_finished_history_is_bounded_by_max_finished():
 
 def test_get_agents_context_limits_finished_entries_shown_to_llm():
     """
-    get_agents_context() must only include the most recent max_finished_in_context
-    finished agents, independent of how many are retained in history (see [B5]).
+    get_agents_context() must only include the most recent finished agents.
+
+    Bounded by max_finished_in_context, independent of how many are
+    retained in history (see [B5]).
     """
     registry = AgentRegistry(max_finished=20)
     for i in range(5):
@@ -237,6 +243,6 @@ def test_get_summary_returns_independent_copies():
 
 @pytest.mark.parametrize('priority', [TaskPriority.HIGH, TaskPriority.MEDIUM, TaskPriority.LOW])
 def test_task_priority_values_order_correctly(priority):
-    """TaskPriority must be an IntEnum where lower value means higher priority."""
+    """The TaskPriority enum must order values so lower means higher priority."""
     assert TaskPriority.HIGH < TaskPriority.MEDIUM < TaskPriority.LOW
     assert isinstance(priority.value, int)
