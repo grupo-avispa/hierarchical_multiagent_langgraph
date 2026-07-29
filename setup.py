@@ -12,7 +12,6 @@ setup(
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        *([('share/' + package_name, ['.env'])] if os.path.exists('.env') else []),
         (os.path.join('share', package_name, 'params'),
             glob(os.path.join('params', '*.json'))),
         (os.path.join('share', package_name, 'params'),
