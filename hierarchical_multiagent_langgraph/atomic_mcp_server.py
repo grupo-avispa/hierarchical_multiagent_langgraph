@@ -689,27 +689,31 @@ async def get_object_region(object_name: str) -> dict:
 # ============= WEATHER =============
 
 
-@mcp.tool(
-    name='get_weather',
-    description="""Get current weather information for a specified city.
-This tool retrieves the current weather conditions for a given city using the Open-Meteo API.
-The required tool input argument is the city name as a string.
-""",
-    tags={'weather', 'current', 'forecast', 'city'}
-)
-async def get_weather(city: str) -> str:
-    if not city:
-        error_response = {
-            'status': 'error',
-            'message': 'Please provide a city name.',
-            'results': []
-        }
-        return json.dumps(error_response, indent=2)
+def _fetch_weather(city: str) -> str:
+    """
+    Fetch today's weather for a city from the Open-Meteo API.
 
+    Blocking HTTP calls; must be run off the MCP event loop via
+    ``asyncio.to_thread`` so a slow or unresponsive third-party API
+    cannot stall every other MCP tool.
+
+    Parameters
+    ----------
+    city : str
+        City name to geocode and fetch weather for.
+
+    Returns
+    -------
+    str
+        JSON-encoded response with 'status', 'message' and 'results'.
+
+    """
     try:
         # Geocoding API to get latitude and longitude for the city
         result_city = requests.get(
-            url='https://geocoding-api.open-meteo.com/v1/search?name=' + city)
+            'https://geocoding-api.open-meteo.com/v1/search',
+            params={'name': city},
+            timeout=5.0)
         location = result_city.json()
         lon = str(location['results'][0]['longitude'])
         lat = str(location['results'][0]['latitude'])
@@ -728,7 +732,7 @@ async def get_weather(city: str) -> str:
         }
 
         # Do the request
-        response = requests.get(url, params=params)
+        response = requests.get(url, params=params, timeout=5.0)
         data = response.json()
         # Extract results
         daily = data['daily']
@@ -749,13 +753,34 @@ async def get_weather(city: str) -> str:
         return json.dumps(tool_response, indent=2)
 
     except Exception as e:
-        # await ctx.error(f'Error retrieving weather data: {e}')
         error_response = {
             'status': 'error',
             'message': f'Error retrieving weather data: {e}',
             'results': []
         }
         return json.dumps(error_response, indent=2)
+
+
+@mcp.tool(
+    name='get_weather',
+    description="""Get current weather information for a specified city.
+This tool retrieves the current weather conditions for a given city using the Open-Meteo API.
+The required tool input argument is the city name as a string.
+""",
+    tags={'weather', 'current', 'forecast', 'city'}
+)
+async def get_weather(city: str) -> str:
+    if not city:
+        error_response = {
+            'status': 'error',
+            'message': 'Please provide a city name.',
+            'results': []
+        }
+        return json.dumps(error_response, indent=2)
+
+    # Run the blocking HTTP requests in a separate thread to avoid
+    # blocking the MCP server's event loop for every other tool.
+    return await asyncio.to_thread(_fetch_weather, city)
 
 
 def ros_spin_thread():
