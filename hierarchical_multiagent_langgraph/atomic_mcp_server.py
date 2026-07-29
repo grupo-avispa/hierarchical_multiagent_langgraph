@@ -492,17 +492,22 @@ class GetObjectRegionNode(Node):
 
         self.get_logger().info('Docking goal accepted, waiting for completion...')
 
-        if result_goal.success:
+        # send_goal() returns the GetResult service response (status + result),
+        # not the DockRobot.Result itself.
+        dock_result = result_goal.result
+
+        if dock_result.success:
             return {
                 'success': True,
                 'message': 'Successfully docked to charging station',
-                'num_retries': result_goal.num_retries
+                'num_retries': dock_result.num_retries
             }
         else:
             return {
                 'success': False,
-                'message': f'Docking failed: {result_goal.message}',
-                'num_retries': result_goal.num_retries
+                'message': f'Docking failed: {dock_result.error_msg}',
+                'num_retries': dock_result.num_retries,
+                'error_code': dock_result.error_code
             }
 
 
