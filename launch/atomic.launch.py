@@ -164,7 +164,7 @@ def generate_launch_description():
     atomic_mcp_server_node = Node(
         package='hierarchical_multiagent_langgraph',
         executable='atomic_mcp_server',
-        name='get_object_region_mcp',
+        name='atomic_tools_node',
         output='screen',
         prefix=[venv_python, ' -u '],
         arguments=['--ros-args', '--log-level', log_level],

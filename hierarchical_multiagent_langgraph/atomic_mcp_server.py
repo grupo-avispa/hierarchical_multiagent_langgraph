@@ -44,11 +44,17 @@ mcp = FastMCP('atomic_mcp_server')
 ros_node = None
 
 
-class GetObjectRegionNode(Node):
-    """ROS2 node to get the region of a detected object."""
+class AtomicToolsNode(Node):
+    """
+    ROS2 node backing the atomic MCP tools: perception, TTS, RAG, navigation and docking.
+
+    Owns every ROS action/service client the atomic tools need
+    (charge_robot, move_to_region, call_rag, say_text, get_object_region)
+    and the object-detection subscription behind get_object_region.
+    """
 
     def __init__(self):
-        super().__init__('get_object_region_mcp')
+        super().__init__('atomic_tools_node')
 
         # Configurable parameters
         self.declare_parameter('objects_topic', '/object_detection/objects_with_region')
@@ -808,7 +814,7 @@ def main(args=None):
     global ros_node
 
     rclpy.init(args=args)
-    ros_node = GetObjectRegionNode()
+    ros_node = AtomicToolsNode()
 
     # Start ROS thread
     ros_thread = threading.Thread(target=ros_spin_thread, daemon=True)
