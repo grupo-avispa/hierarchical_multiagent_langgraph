@@ -242,4 +242,23 @@ Specialized agent for individual tasks:
 - **Own graph**: Independent reasoning cycle
 - **Isolation**: Separate event loop per agent
 
+## Citation
+
+The design and evaluation of this system are described in the following article. If you use this code in your research, please cite it:
+
+```bibtex
+@article{Tudela2026Priority,
+  title={Priority-Driven Hierarchical Multi-Agent Systems with Fine-Tuned LLMs},
+  author={Tudela, Alberto and Pons, {\'O}scar and Galeas, Jos{\'e} and Bandera, Juan Pedro and Bandera, Antonio},
+  journal={Applied Sciences},
+  volume={16},
+  number={16},
+  pages={8250},
+  year={2026},
+  publisher={MDPI},
+  doi={10.3390/app16168250},
+  url={https://www.mdpi.com/2076-3417/16/16/8250}
+}
+```
+
 

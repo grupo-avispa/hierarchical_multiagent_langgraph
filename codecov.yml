@@ -1,0 +1,14 @@
+fixes:
+  - "src/hierarchical_multiagent_langgraph::"
+  - "install/::"
+
+ignore:
+  - "*/**/test/*"
+  - "*/test/**/*"
+  - "**/test_*.*"
+  - "**/main*.*"
+  - "**/*_tests.*"
+  - "*/**/benchmark/*"
+  - "*/benchmark/**/*"
+  - "**/benchmark_*.*"
+  - "**/*_benchmark.*"
