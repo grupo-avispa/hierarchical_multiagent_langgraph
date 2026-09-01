@@ -1,5 +1,9 @@
+# action-ros-ci copies the repo into ros_ws/src/<random-id>/<pkg>/ before building,
+# so coverage paths look like ros_ws/src/ab12cd/hierarchical_multiagent_langgraph/...
+# Strip that prefix so Codecov maps the reports back onto the repo tree.
 fixes:
-  - "src/hierarchical_multiagent_langgraph::"
+  - "ros_ws/src/*/hierarchical_multiagent_langgraph/::"
+  - "src/hierarchical_multiagent_langgraph/::"
   - "install/::"
 
 ignore:
